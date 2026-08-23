@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BookCon</string>
+    <string name="library_title">Library</string>
+    <string name="continue_reading">Continue Reading</string>
+    <string name="search_books">Search books</string>
+    <string name="sign_in">Sign in</string>
+    <string name="create_account">Create account</string>
+    <string name="email">Email</string>
+    <string name="password">Password</string>
+    <string name="server_url">Server URL</string>
+    <string name="device_name">Device name</string>
+    <string name="import_books">Import books</string>
+    <string name="settings">Settings</string>
+    <string name="shelves">Shelves</string>
+    <string name="series">Series</string>
+    <string name="tags">Tags</string>
+    <string name="annotations">Annotations</string>
+    <string name="bookmarks">Bookmarks</string>
+    <string name="table_of_contents">Table of contents</string>
+    <string name="delete_book">Delete book</string>
+    <string name="download_for_offline">Available offline</string>
+    <string name="last_synced">Last synced: %1$s</string>
+    <string name="force_sync">Force sync</string>
+    <string name="storage_manager">Storage manager</string>
+    <string name="devices">Devices</string>
+    <string name="licenses">Open-source licenses</string>
+    <string name="cd_book_cover">Book cover</string>
+</resources>

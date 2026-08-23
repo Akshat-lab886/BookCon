@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.uvcache/
+.pytest_cache/
+.ruff_cache/
+
+# Local dev data
+data/
+bookcon.db
+*.db-wal
+*.db-shm
+_autogen.db
+
+# Env
+.env

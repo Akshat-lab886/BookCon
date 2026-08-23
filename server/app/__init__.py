@@ -1,0 +1,1 @@
+"""BookCon server application package."""

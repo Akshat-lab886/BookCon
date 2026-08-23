@@ -1,0 +1,566 @@
+openapi: 3.1.0
+info:
+  title: BookCon API
+  version: "1.0"
+  description: Self-hosted eBook library & sync API. Auth via Bearer JWT (15 min) + rotating refresh tokens. Deletions are tombstones; every syncable entity carries updated_at/deleted_at.
+servers:
+  - url: "{base}/api/v1"
+    variables:
+      base:
+        default: http://localhost:8000
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    since:
+      name: since
+      in: query
+      schema: { type: string, format: date-time }
+      description: Only entities with updated_at > since.
+    limitParam:
+      name: limit
+      in: query
+      schema: { type: integer, default: 50, maximum: 500 }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+    Tokens:
+      type: object
+      required: [access_token, refresh_token, device]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        token_type: { type: string, default: bearer }
+        device: { $ref: "#/components/schemas/Device" }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        avatar_url: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    Device:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        platform: { type: string }
+        app_version: { type: string }
+        last_seen_at: { type: string, format: date-time, nullable: true }
+        revoked_at: { type: string, format: date-time, nullable: true }
+    FileRef:
+      type: object
+      properties:
+        sha256: { type: string }
+        size_bytes: { type: integer }
+        content_type: { type: string }
+    BookBase:
+      type: object
+      required: [title, format]
+      properties:
+        title: { type: string }
+        authors: { type: array, items: { type: string }, default: [] }
+        description: { type: string, default: "" }
+        language: { type: string, nullable: true }
+        publisher: { type: string, nullable: true }
+        published_date: { type: string, nullable: true }
+        series_id: { type: string, format: uuid, nullable: true }
+        series_index: { type: number, nullable: true }
+    Book:
+      allOf:
+        - $ref: "#/components/schemas/BookBase"
+        - type: object
+          properties:
+            id: { type: string, format: uuid }
+            format: { type: string, enum: [epub, pdf, cbz, cbr] }
+            status: { type: string, enum: [processing, ready, failed], default: ready }
+            status_message: { type: string, nullable: true }
+            cover_url: { type: string, nullable: true }
+            file_size_bytes: { type: integer, nullable: true }
+            page_count: { type: integer, nullable: true }
+            word_count: { type: integer, nullable: true }
+            tag_ids: { type: array, items: { type: string, format: uuid } }
+            shelf_ids: { type: array, items: { type: string, format: uuid } }
+            added_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+            deleted_at: { type: string, format: date-time, nullable: true }
+    Shelf:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        sort_position: { type: integer }
+        updated_at: { type: string, format: date-time }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    Tag:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        updated_at: { type: string, format: date-time }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    Series:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        updated_at: { type: string, format: date-time }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    Locator:
+      description: Readium Locator object (https://readium.org/architecture/models/locators/)
+      type: object
+      required: [href, type]
+      properties:
+        href: { type: string }
+        type: { type: string }
+        title: { type: string }
+        locations: { type: object, additionalProperties: true }
+        text: { type: object, additionalProperties: true }
+    Annotation:
+      type: object
+      required: [book_id, type, locator]
+      properties:
+        id: { type: string, format: uuid }
+        book_id: { type: string, format: uuid }
+        type: { type: string, enum: [highlight, underline, area] }
+        locator: { $ref: "#/components/schemas/Locator" }
+        color: { type: string, default: yellow }
+        note: { type: string, default: "" }
+        annotation_tags: { type: array, items: { type: string }, default: [] }
+        excerpt: { type: string, default: "" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    Bookmark:
+      type: object
+      required: [book_id, locator]
+      properties:
+        id: { type: string, format: uuid }
+        book_id: { type: string, format: uuid }
+        locator: { $ref: "#/components/schemas/Locator" }
+        label: { type: string, default: "" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        deleted_at: { type: string, format: date-time, nullable: true }
+    Position:
+      type: object
+      required: [book_id, locator]
+      properties:
+        book_id: { type: string, format: uuid }
+        locator: { $ref: "#/components/schemas/Locator" }
+        progress_percent: { type: number, nullable: true }
+        updated_at: { type: string, format: date-time }
+    InitiateUploadRequest:
+      type: object
+      required: [filename, size_bytes, sha256, content_type]
+      properties:
+        filename: { type: string }
+        size_bytes: { type: integer }
+        sha256: { type: string, minLength: 64, maxLength: 64 }
+        content_type: { type: string }
+    InitiateUploadResponse:
+      oneOf:
+        - type: object
+          required: [outcome, upload_url, book_id]
+          properties:
+            outcome: { type: string, const: upload_required }
+            upload_url: { type: string }
+            method: { type: string, const: PUT }
+            expires_in: { type: integer }
+        - type: object
+          required: [outcome, book_id]
+          properties:
+            outcome: { type: string, const: duplicate }
+            book_id: { type: string, format: uuid }
+    SyncPushRequest:
+      type: object
+      description: Batch upsert/tombstone. Each row needs client_updated_at; server LWW.
+      properties:
+        annotations: { type: array, items: { $ref: "#/components/schemas/Annotation" } }
+        bookmarks: { type: array, items: { $ref: "#/components/schemas/Bookmark" } }
+        positions: { type: array, items: { $ref: "#/components/schemas/Position" } }
+        shelves: { type: array, items: { $ref: "#/components/schemas/Shelf" } }
+        tags: { type: array, items: { $ref: "#/components/schemas/Tag" } }
+        series: { type: array, items: { $ref: "#/components/schemas/Series" } }
+    SyncPullRequest:
+      type: object
+      properties:
+        cursors:
+          type: object
+          additionalProperties: { type: string }
+          description: >
+            entity -> opaque watermark "<updated_at>|<last_id>" (composite so rows tied at the
+            boundary timestamp are never skipped; a bare date-time is accepted for legacy clients).
+            Missing = full sync.
+    SyncPullResponse:
+      type: object
+      properties:
+        cursors: { type: object, additionalProperties: { type: string, format: date-time } }
+        has_more: { type: boolean }
+        books: { type: array, items: { $ref: "#/components/schemas/Book" } }
+        annotations: { type: array, items: { $ref: "#/components/schemas/Annotation" } }
+        bookmarks: { type: array, items: { $ref: "#/components/schemas/Bookmark" } }
+        positions: { type: array, items: { $ref: "#/components/schemas/Position" } }
+        shelves: { type: array, items: { $ref: "#/components/schemas/Shelf" } }
+        tags: { type: array, items: { $ref: "#/components/schemas/Tag" } }
+        series: { type: array, items: { $ref: "#/components/schemas/Series" } }
+paths:
+  /auth/register:
+    post:
+      security: []
+      summary: Email+password signup; registers first device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, device_name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                display_name: { type: string }
+                device_name: { type: string }
+                app_version: { type: string, default: unknown }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Tokens" } } } }
+        "409": { description: Email exists, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /auth/login:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, device_name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                device_name: { type: string }
+                app_version: { type: string, default: unknown }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Tokens" } } } }
+        "401": { description: Bad credentials }
+  /auth/google:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token, device_name]
+              properties:
+                id_token: { type: string }
+                device_name: { type: string }
+                app_version: { type: string, default: unknown }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Tokens" } } } }
+        "401": { description: Invalid Google token }
+  /auth/refresh:
+    post:
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200": { description: Rotated pair, content: { application/json: { schema: { $ref: "#/components/schemas/Tokens" } } } }
+        "401": { description: Invalid/expired/reused }
+  /auth/logout:
+    post:
+      responses:
+        "204": { description: Refresh token revoked }
+  /me:
+    get:
+      responses:
+        "200": { description: Profile, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+    patch:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string }
+      responses:
+        "200": { description: Updated profile }
+  /devices:
+    get:
+      responses:
+        "200":
+          description: Devices
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/Device" } }
+  /devices/{device_id}:
+    delete:
+      parameters: [{ name: device_id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "204": { description: Revoked }
+  /books:
+    get:
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - $ref: "#/components/parameters/limitParam"
+        - { name: q, in: query, schema: { type: string } }
+        - { name: shelf_id, in: query, schema: { type: string, format: uuid } }
+        - { name: tag_id, in: query, schema: { type: string, format: uuid } }
+        - { name: series_id, in: query, schema: { type: string, format: uuid } }
+        - { name: format, in: query, schema: { type: string } }
+        - { name: sort, in: query, schema: { type: string, enum: [recent, added, title, author, progress], default: recent } }
+      responses:
+        "200":
+          description: Page of books
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Book" } }
+                  next_cursor: { type: string, nullable: true }
+  /books/initiate-upload:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InitiateUploadRequest" }
+      responses:
+        "201": { description: Presigned URL or dedupe hit, content: { application/json: { schema: { $ref: "#/components/schemas/InitiateUploadResponse" } } } }
+  /books/{book_id}:
+    get:
+      parameters: [{ name: book_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Book detail, content: { application/json: { schema: { $ref: "#/components/schemas/Book" } } } }
+        "404": { description: Not found }
+    patch:
+      parameters: [{ name: book_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/BookBase"
+                - type: object
+                  properties:
+                    tag_ids: { type: array, items: { type: string, format: uuid } }
+                    shelf_ids: { type: array, items: { type: string, format: uuid } }
+      responses:
+        "200": { description: Updated book }
+    delete:
+      parameters: [{ name: book_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Tombstoned }
+  /books/{book_id}/complete-upload:
+    post:
+      parameters: [{ name: book_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "202": { description: Processing started, content: { application/json: { schema: { $ref: "#/components/schemas/Book" } } } }
+  /books/{book_id}/file-url:
+    get:
+      parameters: [{ name: book_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200":
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string }
+                  expires_in: { type: integer }
+  /annotations:
+    get:
+      parameters:
+        - { name: book_id, in: query, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/since"
+      responses:
+        "200": { description: List, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Annotation" } } } } }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Annotation" }
+      responses:
+        "201": { description: Created }
+  /annotations/{annotation_id}:
+    patch:
+      parameters: [{ name: annotation_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                color: { type: string }
+                note: { type: string }
+                annotation_tags: { type: array, items: { type: string } }
+      responses:
+        "200": { description: Updated }
+    delete:
+      parameters: [{ name: annotation_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Tombstoned }
+  /bookmarks:
+    get:
+      parameters:
+        - { name: book_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: List }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Bookmark" }
+      responses:
+        "201": { description: Created }
+  /bookmarks/{bookmark_id}:
+    patch:
+      parameters: [{ name: bookmark_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Updated }
+    delete:
+      parameters: [{ name: bookmark_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Tombstoned }
+  /positions/{book_id}:
+    put:
+      parameters: [{ name: book_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Position" }
+      responses:
+        "200": { description: Stored (LWW), content: { application/json: { schema: { $ref: "#/components/schemas/Position" } } } }
+  /shelves:
+    get:
+      responses:
+        "200": { description: List, content: { application/json: { schema: { type: array, items: { $ref: "#/components/schemas/Shelf" } } } } }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /shelves/{shelf_id}:
+    patch:
+      parameters: [{ name: shelf_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { name: { type: string }, sort_position: { type: integer } } }
+      responses:
+        "200": { description: Updated }
+    delete:
+      parameters: [{ name: shelf_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Tombstoned (membership cleared, books kept) }
+  /tags:
+    get:
+      responses:
+        "200": { description: List }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /tags/{tag_id}:
+    patch:
+      parameters: [{ name: tag_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "200": { description: Renamed }
+    delete:
+      parameters: [{ name: tag_id, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        "204": { description: Tombstoned }
+  /series:
+    get:
+      responses:
+        "200": { description: List }
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string } } }
+      responses:
+        "201": { description: Created }
+  /sync/push:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyncPushRequest" }
+      responses:
+        "200":
+          description: Per-entity accepted ids and authoritative payloads
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted:
+                    type: object
+                    additionalProperties: { type: array, items: { type: string, format: uuid } }
+                  authoritative:
+                    type: object
+                    additionalProperties: true
+  /sync/pull:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyncPullRequest" }
+      responses:
+        "200": { description: Changes since cursors, content: { application/json: { schema: { $ref: "#/components/schemas/SyncPullResponse" } } } }
+  /storage/stats:
+    get:
+      responses:
+        "200":
+          description: Usage
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_bytes: { type: integer }
+                  book_count: { type: integer }
+                  annotation_count: { type: integer }
+  /healthz:
+    get:
+      security: []
+      responses:
+        "200": { description: Healthy }
