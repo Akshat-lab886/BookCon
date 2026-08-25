@@ -44,7 +44,8 @@ class SessionStore @Inject constructor(@ApplicationContext context: Context) {
                 putString(KEY_DEVICE_ID, session.deviceId)
                 putString(KEY_EMAIL, session.email)
             }
-        }.apply()
+        }.commit()
+        android.util.Log.w("BookConAuth", "SessionStore.update rfLen=${session?.refreshToken?.length ?: -1} commitOk")
         _session.value = session
     }
 

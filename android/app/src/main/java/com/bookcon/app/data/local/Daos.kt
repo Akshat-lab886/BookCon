@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface BookDao {
+    @Query("SELECT * FROM books")
+    suspend fun all(): List<BookEntity>
+
     @Query(
         """
         SELECT * FROM books
@@ -72,6 +75,12 @@ interface AnnotationDao {
     @Query("SELECT * FROM annotations WHERE bookId = :bookId AND deletedAt IS NULL")
     suspend fun forBook(bookId: String): List<AnnotationEntity>
 
+    @Query("SELECT * FROM annotations WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): AnnotationEntity?
+
+    @Query("SELECT * FROM annotations")
+    suspend fun allRaw(): List<AnnotationEntity>
+
     @Query("SELECT * FROM annotations WHERE dirty = 1")
     suspend fun dirty(): List<AnnotationEntity>
 
@@ -90,6 +99,9 @@ interface AnnotationDao {
 
 @Dao
 interface BookmarkDao {
+    @Query("SELECT * FROM bookmarks")
+    suspend fun all(): List<BookmarkEntity>
+
     @Query("SELECT * FROM bookmarks WHERE deletedAt IS NULL AND bookId = :bookId ORDER BY updatedAt ASC")
     fun observeForBook(bookId: String): Flow<List<BookmarkEntity>>
 

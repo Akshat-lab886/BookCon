@@ -22,12 +22,14 @@ import com.bookcon.app.data.remote.ApiProvider
 import com.bookcon.app.data.remote.NameRequest
 import com.bookcon.app.data.repo.AuthRepository
 import com.bookcon.app.data.sync.enqueueDownload
+import com.bookcon.app.core.SettingsRepository
 import com.bookcon.app.data.sync.enqueueUpload
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.security.MessageDigest
 import java.time.OffsetDateTime
+import java.util.UUID
 import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -104,6 +106,7 @@ class LibraryViewModel @Inject constructor(
     positionDao: PositionDao,
     private val apiProvider: ApiProvider,
     private val sessions: SessionStore,
+    private val settingsRepo: SettingsRepository,
 ) : ViewModel() {
 
     private val bookDao = db.bookDao()
@@ -373,17 +376,52 @@ class LibraryViewModel @Inject constructor(
                         }
                     }
                     val sha256 = digest.digest().joinToString("") { "%02x".format(it) }
-                    uploadQueueDao.enqueue(
-                        UploadQueueItem(
-                            pendingUri = uri.toString(),
-                            filename = name,
-                            sizeBytes = size,
-                            sha256 = sha256,
-                            contentType = mimeFor(name),
-                            state = UploadState.PENDING,
-                        ),
-                    )
-                    queued++
+
+                    // Local Vault: no account (or local-only mode) → create the book row
+                    // directly from the staged file instead of waiting for a server upload.
+                    val online = com.bookcon.app.core.Net.isOnline(appContext)
+                    val signedIn = sessions.current()?.accessToken?.isNotBlank() == true
+                    if (online && signedIn && !settingsRepo.settings.value.localUsable) {
+                        uploadQueueDao.enqueue(
+                            UploadQueueItem(
+                                pendingUri = uri.toString(),
+                                filename = name,
+                                sizeBytes = size,
+                                sha256 = sha256,
+                                contentType = mimeFor(name),
+                                state = UploadState.PENDING,
+                            ),
+                        )
+                        queued++
+                    } else {
+                        // Local mode: register the staged file as a ready-to-read book.
+                        val title = name.substringBeforeLast('.').replace('_', ' ').trim()
+                            .ifBlank { "Imported book" }
+                        val now = OffsetDateTime.now(ZoneOffset.UTC).toString()
+                        val bookId = UUID.randomUUID().toString()
+                        // Real cover art straight from the file (EPUB zip / PDF page 1).
+                        val coverUrl = com.bookcon.app.core.CoverExtractor.ensureCover(
+                            appContext, bookId,
+                            name.substringAfterLast('.', "epub").lowercase(), staging.path,
+                        )
+                        bookDao.upsert(
+                            BookEntity(
+                                id = bookId,
+                                userId = "vault",
+                                format = name.substringAfterLast('.', "epub").lowercase(),
+                                status = "ready",
+                                title = title,
+                                authors = emptyList(),
+                                fileSizeBytes = size,
+                                addedAt = now,
+                                updatedAt = now,
+                                dirty = false,
+                                localFile = staging.path,
+                                coverUrl = coverUrl,
+                            ),
+                        )
+                        queued++
+                    }
                 } catch (_: Exception) {
                     // Skip unreadable picks; remaining files still import.
                 }

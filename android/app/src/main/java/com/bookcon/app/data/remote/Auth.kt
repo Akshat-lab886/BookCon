@@ -29,10 +29,8 @@ class AuthInterceptor(private val sessions: SessionStore) : Interceptor {
  */
 class TokenAuthenticator(
     private val sessions: SessionStore,
-    private val apiProvider: () -> ApiService,
+    private val refresher: TokenRefresher,
 ) : Authenticator {
-
-    private val mutex = Mutex()
 
     override fun authenticate(route: Route?, response: Response): Request? {
         // Never retry an already-retried request: if the fresh token is also
@@ -47,28 +45,10 @@ class TokenAuthenticator(
                 .header("Authorization", "Bearer ${sessions.current()?.accessToken}")
                 .build()
         }
-        val rotated = runBlocking { mutex.withLock { refreshOnce(current) } } ?: return null
+        val rotated = runBlocking { refresher.refreshStale(current) } ?: return null
         return response.request.newBuilder()
             .header("Authorization", "Bearer ${rotated.accessToken}")
             .build()
     }
 
-    /** Suspend body executed inside runBlocking on the OkHttp authenticator thread. */
-    private suspend fun refreshOnce(stale: Session): Session? {
-        return try {
-            val resp = apiProvider().refresh(RefreshRequest(stale.refreshToken))
-            val tokens = resp.body()
-            if (resp.isSuccessful && tokens != null) {
-                sessions.update(
-                    stale.copy(accessToken = tokens.accessToken, refreshToken = tokens.refreshToken),
-                )
-                sessions.current()
-            } else {
-                sessions.update(null) // reuse detected or expired → signed out
-                null
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
 }

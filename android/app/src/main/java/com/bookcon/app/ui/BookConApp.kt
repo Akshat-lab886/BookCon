@@ -24,16 +24,23 @@ object Routes {
 }
 
 @Composable
-fun BookConApp(navController: NavHostController, session: Session?) {
-    when (session) {
-        null -> NavHost(navController, startDestination = Routes.AUTH) {
+fun BookConApp(
+    navController: NavHostController,
+    session: Session?,
+    localMode: Boolean = false,
+) {
+    // Local Vault: storageMode != cloud lets you use the whole app without an
+    // account — everything stays on-device and sync workers simply no-op.
+    val startInLibrary = session != null || localMode
+    when {
+        !startInLibrary -> NavHost(navController, startDestination = Routes.AUTH) {
             composable(Routes.AUTH) {
                 com.bookcon.app.ui.auth.AuthScreen(
-                    onSignedIn = {
-                        navController.navigate(Routes.LIBRARY) {
-                            popUpTo(Routes.AUTH) { inclusive = true }
-                        }
-                    },
+                    // No navigate() here: publishing the authenticated session flips
+                    // `session` and swaps this whole NavHost for the library graph.
+                    // Navigating manually raced that recomposition and crashed with
+                    // "destination route library cannot be found" (graph still auth).
+                    onSignedIn = { },
                 )
             }
         }

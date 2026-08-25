@@ -17,6 +17,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +40,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -90,6 +95,66 @@ fun StorageManagerScreen(
                 modifier = Modifier.padding(padding),
             ) {
                 item(key = "server") {
+                    // --- Local Vault: mode + export/import of a portable archive ---
+                    Card {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Local vault", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Your books, reading positions, highlights and history live on this device. Export them to one file and open it on another tablet — no account needed.",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+
+                            val modes = listOf(
+                                "cloud" to "Cloud",
+                                "local" to "Local only",
+                                "both" to "Both",
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                modes.forEach { (value, label) ->
+                                    FilterChip(
+                                        selected = state.storageMode == value,
+                                        onClick = { viewModel.setStorageMode(value) },
+                                        label = { Text(label) },
+                                    )
+                                }
+                            }
+
+                            val exportLauncher = rememberLauncherForActivityResult(
+                                ActivityResultContracts.CreateDocument("application/zip"),
+                            ) { uri ->
+                                uri?.let(viewModel::exportVault)
+                            }
+                            val importLauncher = rememberLauncherForActivityResult(
+                                ActivityResultContracts.OpenDocument(),
+                            ) { uri ->
+                                uri?.let(viewModel::importVault)
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(
+                                    enabled = !state.vaultBusy,
+                                    onClick = { exportLauncher.launch("bookcon-vault.zip") },
+                                ) {
+                                    Text(if (state.vaultBusy) "Working…" else "Export data")
+                                }
+                                OutlinedButton(
+                                    enabled = !state.vaultBusy,
+                                    onClick = {
+                                        importLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
+                                    },
+                                ) {
+                                    Text("Import data")
+                                }
+                            }
+                            if (state.storageMode == "cloud") {
+                                Text(
+                                    "Cloud mode syncs automatically when you sign in; local export/import still works.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+
                     Card {
                         Column(Modifier.padding(16.dp)) {
                             Text("Server usage", style = MaterialTheme.typography.titleSmall)

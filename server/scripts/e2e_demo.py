@@ -40,15 +40,19 @@ def make_epub(title: str, author: str) -> bytes:
     <dc:language>en</dc:language>
     <dc:description>E2E demo book.</dc:description>
     <meta name="cover" content="cover-image"/>
+    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
   </metadata>
   <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>
     <item id="cover-image" href="cover.png" media-type="image/png" properties="cover-image"/>
   </manifest>
   <spine><itemref idref="c1"/></spine>
 </package>"""
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("mimetype", "application/epub+zip")
+        mimetype = zipfile.ZipInfo("mimetype")
+        mimetype.compress_type = zipfile.ZIP_STORED
+        zf.writestr(mimetype, "application/epub+zip")
         zf.writestr("META-INF/container.xml", (
             '<?xml version="1.0"?><container version="1.0" '
             'xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
@@ -56,6 +60,10 @@ def make_epub(title: str, author: str) -> bytes:
             "</rootfiles></container>"
         ))
         zf.writestr("content.opf", opf)
+        zf.writestr("nav.xhtml", (
+            '<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" '
+            'xmlns:epub="http://www.idpf.org/2007/ops"><head><title>toc</title></head><body>'
+            '<nav epub:type="toc"><ol><li><a href="c1.xhtml">Demo</a></li></ol></nav></body></html>'))
         zf.writestr("c1.xhtml", "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body><p>demo</p></body></html>")
         zf.writestr("cover.png", base64.b64decode(_TINY_PNG_B64))
     return buf.getvalue()

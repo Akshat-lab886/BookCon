@@ -320,6 +320,7 @@ internal suspend fun runPullOnce(
 }
 
 /** Pull-only worker for periodic background sync (push happens via [PushWorker]). */
+@HiltWorker
 class PullWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,

@@ -36,6 +36,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.bookcon.app.ui.reader.PdfInkToolBar
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material.icons.filled.Edit
+import com.bookcon.app.reader.PdfInkTool
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -73,10 +77,14 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
@@ -92,6 +100,8 @@ import com.bookcon.app.reader.TapZoneGrid
 import com.bookcon.app.ui.theme.ReaderTheme
 import com.bookcon.app.ui.theme.ReaderThemes
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 
 /**
  * Reader route (PRD RD-8…RD-18, ANN-1…4). Hosts the Readium navigator fragment plus Compose
@@ -251,31 +261,177 @@ private fun ReaderContentHost(
                 }
             },
     ) {
-        if (engine == null) {
-            ReaderStatusCard(state = state, onClose = onClose)
-        } else {
+        val pdf = state.pdfBook
+        when {
+            // PDFs render through our own PdfRenderer pager (no Readium navigator).
+            pdf != null -> PdfPager(
+                pdf = pdf,
+                startPage = state.pdfStartPage,
+                title = state.book?.title.orEmpty(),
+                chromeVisible = state.chromeVisible,
+                strokes = state.pdfStrokes,
+                inkTool = state.pdfInkTool,
+                inkColor = state.pdfInkColor,
+                onPageChanged = viewModel::onPdfPageChanged,
+                onToggleChrome = viewModel::toggleChrome,
+                onStrokeFinished = { key, mode, pts ->
+                    viewModel.addPdfStroke(key.toIntOrNull() ?: 0, mode, pts)
+                },
+                onEraseStroke = { key, strokeId ->
+                    viewModel.erasePdfStroke(key.toIntOrNull() ?: 0, strokeId)
+                },
+                onUndoStroke = viewModel::undoLastPdfStroke,
+                onInkToolChange = viewModel::setPdfInkTool,
+                onInkColorChange = viewModel::setPdfInkColor,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            engine == null -> ReaderStatusCard(state = state, onClose = onClose)
+
+            else -> {
             NavigatorContainer(engine = engine, modifier = Modifier.fillMaxSize())
+
+
+            val probeActivity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+            LaunchedEffect(engine, probeActivity) {
+                if (probeActivity == null) return@LaunchedEffect
+                // The navigator webview attaches asynchronously; poll until it exists.
+                var wv = findWebView(probeActivity.window.decorView)
+                var tries = 0
+                while (wv == null && tries < 40) {
+                    kotlinx.coroutines.delay(500)
+                    wv = findWebView(probeActivity.window.decorView)
+                    tries++
+                }
+                if (wv == null) return@LaunchedEffect
+                engine.webViewEvaluator = { js, onResult ->
+                    wv.post { wv.evaluateJavascript(js, onResult) }
+                }
+                engine.nativeSwipeTurn = { forward ->
+                    val width = wv.width.toFloat()
+                    val height = wv.height.toFloat()
+                    if (width <= 0f || height <= 0f) false
+                    else {
+                        val y = height * 0.6f
+                        // Moderate drag (~45% width, ~260ms): enough for the pager to
+                        // register one column, gentle enough to avoid momentum skips.
+                        val x0 = width * (if (forward) 0.72f else 0.28f)
+                        val x1 = width * (if (forward) 0.28f else 0.72f)
+                        val start = android.os.SystemClock.uptimeMillis()
+                        fun ev(action: Int, x: Float, t: Long) =
+                            android.view.MotionEvent.obtain(start, t, action, x, y, 0)
+                        val steps = 12
+                        wv.dispatchTouchEvent(ev(android.view.MotionEvent.ACTION_DOWN, x0, start))
+                        for (i in 1 until steps) {
+                            val t = start + i * 26L
+                            val frac = i.toFloat() / steps
+                            wv.dispatchTouchEvent(
+                                ev(android.view.MotionEvent.ACTION_MOVE, x0 + (x1 - x0) * frac, t),
+                            )
+                        }
+                        wv.dispatchTouchEvent(ev(android.view.MotionEvent.ACTION_UP, x1, start + steps * 22L))
+                        true
+                    }
+                }
+            }
+
+            // ANN-2: long-presses inside actionable tap-zone cells must still reach the
+            // navigator webview, otherwise text selection (and thus highlights) is
+            // impossible. We forward a synthetic DOWN…UP pair into the WebView.
+            val activityForFind = androidx.compose.ui.platform.LocalContext.current
+            val forwardLongPress = remember(activityForFind) {
+                { screenX: Float, screenY: Float ->
+                    val webView = (activityForFind as? android.app.Activity)
+                        ?.window?.decorView?.let { findWebView(it) }
+                    if (webView != null) {
+                        val loc = IntArray(2)
+                        webView.getLocationOnScreen(loc)
+                        val lx = screenX - loc[0]
+                        val ly = screenY - loc[1]
+                        val now = android.os.SystemClock.uptimeMillis()
+                        val down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, lx, ly, 0)
+                        webView.dispatchTouchEvent(down)
+                        webView.postDelayed({
+                            val up = android.view.MotionEvent.obtain(now, now + 400, android.view.MotionEvent.ACTION_UP, lx, ly, 0)
+                            webView.dispatchTouchEvent(up)
+                            down.recycle()
+                            up.recycle()
+                        }, 420L)
+                    }
+                }
+            }
 
             // RD-8: configurable 3×3 tap zones. Only cells with a configured action
             // are hit-testable; every other pixel passes through to the navigator so
             // scrolling, text selection, and links keep working.
+            val inkArmed = state.pdfInkTool != PdfInkTool.NONE
             TapZoneLayer(
                 grid = TapZoneGrid.fromJson(settings.tapZonesJson),
                 modifier = Modifier.fillMaxSize(),
+                gesturesEnabled = !inkArmed,
                 onPrev = { viewModel.turnPage(forward = false) },
                 onNext = { viewModel.turnPage(forward = true) },
                 onToggleChrome = { viewModel.toggleChrome() },
+                onLongPressAtRoot = forwardLongPress.takeIf { !inkArmed },
             )
+
+            // INK-4: freehand pen/marker/eraser over EPUB pages.
+            PdfInkLayer(
+                strokes = state.epubStrokes[state.epubAnchor].orEmpty(),
+                tool = state.pdfInkTool,
+                colorHex = state.pdfInkColor,
+                anchorKey = state.epubAnchor,
+                onStrokeFinished = { key, mode, points ->
+                    viewModel.addEpubStroke(key, mode, points)
+                },
+                onEraseStroke = { key, strokeId ->
+                    viewModel.eraseEpubStroke(key, strokeId)
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            androidx.compose.material3.ExtendedFloatingActionButton(
+                onClick = {
+                    viewModel.setPdfInkTool(
+                        if (inkArmed) PdfInkTool.NONE else PdfInkTool.PEN,
+                    )
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 20.dp, bottom = 96.dp),
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Icon(Icons.Filled.Edit, contentDescription = "Pen & highlighter")
+            }
+
+            if (inkArmed) {
+                PdfInkToolBar(
+                    activeTool = state.pdfInkTool,
+                    activeColor = state.pdfInkColor,
+                    canUndo = true,
+                    onPen = { viewModel.setPdfInkTool(PdfInkTool.PEN) },
+                    onHighlighter = { viewModel.setPdfInkTool(PdfInkTool.HIGHLIGHTER) },
+                    onEraser = { viewModel.setPdfInkTool(PdfInkTool.ERASER) },
+                    onColor = viewModel::setPdfInkColor,
+                    onUndo = viewModel::undoLastEpubStroke,
+                    onClose = { viewModel.setPdfInkTool(PdfInkTool.NONE) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 88.dp),
+                )
+            }
 
             // ANN-1/ANN-2: selection toolbar while text is selected.
             SelectionToolbarHost(
                 engine = engine,
-                visible = state.panel == ReaderPanel.NONE,
+                visible = state.panel == ReaderPanel.NONE && !state.pdfInkTool.let { it != PdfInkTool.NONE },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 104.dp),
                 onSave = { selection, color, note ->
                     if (selection != null) {
+                        // Persisted highlight; observeAnnotations mirrors it onto the
+                        // navigator as a Readium Decoration (visible in-page highlight).
                         viewModel.addAnnotation(
                             color = color,
                             note = note,
@@ -296,7 +452,6 @@ private fun ReaderContentHost(
                 onTap = viewModel::jumpToAnnotation,
                 onLongPress = onLongPressAnnotation,
             )
-        }
 
         // RD-13 chrome.
         val showChrome = engine != null && state.chromeVisible && state.panel == ReaderPanel.NONE
@@ -343,7 +498,9 @@ private fun ReaderContentHost(
             onDismissTapZoneEditor = onDismissTapZoneEditor,
             onEditTapZones = onEditTapZones,
         )
-    }
+            } // else (Readium engine)
+        } // when (pdf / status / engine)
+    } // Box
 }
 
 // --------------------------------------------------------------------------------- navigator
@@ -357,7 +514,10 @@ private fun ReaderContentHost(
  * explanatory card instead of crashing.
  */
 @Composable
-private fun NavigatorContainer(engine: ReaderEngine, modifier: Modifier = Modifier) {
+private fun NavigatorContainer(
+    engine: ReaderEngine,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val activity = context as? FragmentActivity
     if (activity == null) {
@@ -379,6 +539,8 @@ private fun NavigatorContainer(engine: ReaderEngine, modifier: Modifier = Modifi
                 .replace(containerId, fragment)
                 .commitAllowingStateLoss()
         }
+        // Settings captured before attach are applied once the fragment lands.
+        engine.flushPendingSettings()
     }
 }
 
@@ -565,32 +727,70 @@ private fun BatteryStub(modifier: Modifier = Modifier) {
 private fun TapZoneLayer(
     grid: TapZoneGrid,
     modifier: Modifier = Modifier,
+    gesturesEnabled: Boolean = true,
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onToggleChrome: () -> Unit,
+    onLongPressAtRoot: ((Float, Float) -> Unit)? = null,
 ) {
     Column(modifier = modifier) {
         repeat(TapZoneGrid.GRID_SIZE) { row ->
             Row(modifier = Modifier.weight(1f)) {
                 repeat(TapZoneGrid.GRID_SIZE) { column ->
                     val action = grid.actionFor(row, column)
+                    var cellRoot by remember { mutableStateOf(Offset.Zero) }
                     Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
+                            .onGloballyPositioned { cellRoot = it.positionInRoot() }
                             .then(
-                                if (action == TapAction.NONE) {
-                                    Modifier // no clickable → touches pass through
+                                if (action == TapAction.NONE || !gesturesEnabled) {
+                                    Modifier // no handlers → touches pass through
                                 } else {
-                                    Modifier.clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null,
-                                    ) {
-                                        when (action) {
-                                            TapAction.PREV_PAGE -> onPrev()
-                                            TapAction.NEXT_PAGE -> onNext()
-                                            TapAction.TOGGLE_CHROME -> onToggleChrome()
-                                            TapAction.NONE -> Unit
+                                    Modifier.pointerInput(action, gesturesEnabled) {
+                                        // RD-8 v2: detect only genuine TAPS and let every
+                                        // other gesture (swipes, scrolls) fall through to the
+                                        // navigator webview below so native page-turn swipes
+                                        // keep working.
+                                        awaitEachGesture {
+                                            val down = awaitFirstDown(requireUnconsumed = false)
+                                            var consumedElsewhere = false
+                                            var moved = false
+                                            var upOffset: Offset? = null
+                                            while (true) {
+                                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                if (event.changes.any { it.isConsumed }) {
+                                                    consumedElsewhere = true
+                                                }
+                                                val change = event.changes.firstOrNull() ?: break
+                                                if (!change.pressed) {
+                                                    upOffset = change.position
+                                                    break
+                                                }
+                                                val dx = change.position.x - change.previousPosition.x
+                                                val dy = change.position.y - change.previousPosition.y
+                                                if (kotlin.math.sqrt(dx * dx + dy * dy) >
+                                                    viewConfiguration.touchSlop * 2f
+                                                ) {
+                                                    moved = true
+                                                }
+                                            }
+                                            if (!consumedElsewhere && !moved && upOffset != null) {
+                                                when (action) {
+                                                    TapAction.PREV_PAGE -> onPrev()
+                                                    TapAction.NEXT_PAGE -> onNext()
+                                                    TapAction.TOGGLE_CHROME -> onToggleChrome()
+                                                    TapAction.NONE -> Unit
+                                                }
+                                            } else if (!moved && upOffset != null &&
+                                                action != TapAction.NONE
+                                            ) {
+                                                // Stationary press inside an actionable zone:
+                                                // forward as long-press for text selection.
+                                                val target = cellRoot + upOffset
+                                                onLongPressAtRoot?.invoke(target.x, target.y)
+                                            }
                                         }
                                     }
                                 },
@@ -600,6 +800,17 @@ private fun TapZoneLayer(
             }
         }
     }
+}
+
+/** Recursively finds the Readium content WebView under [view]. */
+fun findWebView(view: android.view.View): android.webkit.WebView? {
+    if (view is android.webkit.WebView) return view
+    if (view is android.view.ViewGroup) {
+        for (i in 0 until view.childCount) {
+            findWebView(view.getChildAt(i))?.let { return it }
+        }
+    }
+    return null
 }
 
 // --------------------------------------------------------------------------------- overlays

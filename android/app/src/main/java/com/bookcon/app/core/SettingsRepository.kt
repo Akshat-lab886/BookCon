@@ -33,7 +33,9 @@ private val Context.dataStore by preferencesDataStore(name = "bookcon_settings")
  * volume-key turns, orientation lock and the 3×3 tap-zone grid (RD-8).
  */
 data class AppSettings(
-    val serverUrl: String = "http://10.0.2.2:8000",
+    // 127.0.0.1 pairs with `adb reverse tcp:8000 tcp:8000` (USB debugging); emulator users
+    // should set http://10.0.2.2:<port> and LAN users the host's IP in Settings.
+    val serverUrl: String = "http://127.0.0.1:8000",
     val themeMode: String = "auto", // auto | light | dark | black | sepia
     val readerFontFamily: String = "Literata", // bundled open-font name (see ui/reader/ReaderFonts)
     val readerFontSizeSp: Float = 18f,
@@ -54,7 +56,15 @@ data class AppSettings(
     val orientationLock: String = "system", // system | portrait | landscape (RD-15)
     /** Serialized TapZoneGrid JSON (RD-8); blank → right-handed default. */
     val tapZonesJson: String = "",
-)
+    /**
+     * Data & storage mode: "cloud" (account sync), "local" (on-device only, no
+     * account needed), or "both" (account + manual local archive import/export).
+     */
+    val storageMode: String = "cloud",
+) {
+    val localUsable: Boolean get() = storageMode != "cloud"
+}
+
 
 @Singleton
 class SettingsRepository @Inject constructor(@ApplicationContext context: Context) {
@@ -88,6 +98,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     private val keyVolumeKeyTurns = booleanPreferencesKey("volume_key_turns")
     private val keyOrientationLock = stringPreferencesKey("orientation_lock")
     private val keyTapZones = stringPreferencesKey("reader_tap_zones_json")
+    private val keyStorageMode = stringPreferencesKey("storage_mode")
 
     val settings: StateFlow<AppSettings> = context.dataStore.data
         .map(::readSettings)
@@ -112,6 +123,11 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     /** Appearance (PRD): auto | light | dark | black | sepia. */
     suspend fun setThemeMode(mode: String) {
         update { it.copy(themeMode = mode) }
+    }
+
+    /** cloud | local | both — see [AppSettings.storageMode]. */
+    suspend fun setStorageMode(mode: String) {
+        update { it.copy(storageMode = mode) }
     }
 
     private val keyLastSyncedAt = longPreferencesKey("last_synced_at")
@@ -149,6 +165,7 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         readerKeepScreenOn = prefs[keyReaderKeepScreenOn] ?: false,
         volumeKeyTurns = prefs[keyVolumeKeyTurns] ?: true,
         orientationLock = prefs[keyOrientationLock] ?: "system",
+        storageMode = prefs[keyStorageMode] ?: "cloud",
         tapZonesJson = prefs[keyTapZones] ?: "",
     )
 
@@ -174,12 +191,13 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         this[keyVolumeKeyTurns] = s.volumeKeyTurns
         this[keyOrientationLock] = s.orientationLock
         this[keyTapZones] = s.tapZonesJson
+        this[keyStorageMode] = s.storageMode
     }
 
     private fun jsonFloat(json: String, field: String): Float? =
         Regex("\"$field\"\\s*:\\s*(-?[0-9.]+)").find(json)?.groupValues?.get(1)?.toFloatOrNull()
 
     companion object {
-        const val DEFAULT_SERVER = "http://10.0.2.2:8000"
+        const val DEFAULT_SERVER = "http://127.0.0.1:8000"
     }
 }

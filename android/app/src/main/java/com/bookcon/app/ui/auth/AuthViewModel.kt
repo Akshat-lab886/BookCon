@@ -74,6 +74,14 @@ class AuthViewModel @Inject constructor(
     fun onDeviceNameChange(value: String) =
         _state.update { it.copy(deviceName = value) }
 
+    /** Local Vault: switch to on-device-only mode and enter the app without an account. */
+    fun useLocalOnly() {
+        viewModelScope.launch {
+            settingsRepo.setStorageMode("local")
+            _events.send(AuthEvent.SignedIn) // session stays null; MainActivity flips to library
+        }
+    }
+
     fun setRegisterMode(register: Boolean) =
         _state.update { it.copy(registerMode = register, passwordError = null, serverError = null) }
 
@@ -115,6 +123,7 @@ class AuthViewModel @Inject constructor(
                     _events.send(AuthEvent.SignedIn)
                 }
                 is AuthResult.Failure -> {
+                    android.util.Log.e("BookConAuth", "submit failure: ${result.message}")
                     _state.update { it.copy(loading = false, serverError = result.message) }
                     _events.send(AuthEvent.Message(result.message))
                 }

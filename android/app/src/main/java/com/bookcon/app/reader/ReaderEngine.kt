@@ -7,9 +7,14 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.util.UUID
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.json.JSONException
@@ -24,6 +29,8 @@ import org.readium.r2.navigator.preferences.TextAlign
 import org.readium.r2.navigator.preferences.Theme
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
+import kotlin.coroutines.resume
+import org.readium.r2.shared.publication.services.positions
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.util.asset.AssetRetriever
 import org.readium.r2.shared.util.format.FormatHints
@@ -107,7 +114,20 @@ interface ReaderEngine {
 
     fun applySettings(settings: EngineSettings) {}
 
+    /**
+     * Applies settings captured while the navigator fragment was not yet attached.
+     * ReaderScreen calls this right after committing the fragment transaction;
+     * default is a no-op for engines without deferral.
+     */
+    fun flushPendingSettings() {}
+
     fun clearSelection() {}
+
+    /** Optional JS bridge into the reader webview (EPUB). Null for non-web engines. */
+    var webViewEvaluator: ((js: String, onResult: (String?) -> Unit) -> Unit)?
+
+    /** Optional real-touch swipe injector (EPUB). Null for non-web engines. */
+    var nativeSwipeTurn: ((forward: Boolean) -> Boolean)?
 
     /** Releases the navigator fragment and any engine resources. Idempotent; main thread. */
     fun close()
@@ -120,6 +140,32 @@ interface ReaderEngine {
     }
 }
 
+
+/** A single ink stroke (pen/highlighter/eraser) on a PDF page. */
+@Serializable
+data class PdfInkStroke(
+    val id: String = UUID.randomUUID().toString(),
+    val page: Int,
+    val color: String,
+    val width: Float,
+    val points: List<Float>, // flattened [x1, y1, x2, y2, ...] normalized 0..1
+    val mode: String, // "pen", "highlighter", "eraser"
+    val createdAt: String = java.time.Instant.now().toString(),
+)
+
+/** Tool modes for PDF ink overlay. */
+enum class PdfInkTool {
+    NONE,
+    PEN,
+    HIGHLIGHTER,
+    ERASER,
+}
+
+internal val inkJson = Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = false
+}
+
 /**
  * Shared plumbing for engines backed by any Readium [Navigator] fragment
  * ([EpubNavigatorFragment], and later Pdf/Image navigators).
@@ -130,6 +176,34 @@ abstract class CommonNavigatorEngine(
 ) : ReaderEngine {
 
     final override val currentLocator: StateFlow<Locator> = navigator.currentLocator
+
+    /** Set by the UI layer to run JS inside the reader webview (see EpubReaderEngine). */
+    override var webViewEvaluator: ((js: String, onResult: (String?) -> Unit) -> Unit)? = null
+
+    /** Set by UI: performs a real touch-swipe inside the reader webview. */
+    override var nativeSwipeTurn: ((forward: Boolean) -> Boolean)? = null
+
+    protected suspend fun tryNativeSwipe(forward: Boolean): Boolean? {
+        val swipe = nativeSwipeTurn ?: return null
+        val before = navigator.currentLocator.value
+        val dispatched = swipe(forward)
+        if (!dispatched) return null
+        // Success = locator actually moved within ~1.6s of the gesture.
+        // One retry: the first gesture sometimes only wakes the pager.
+        repeat(2) { attempt ->
+            repeat(if (attempt == 0) 24 else 10) {
+                kotlinx.coroutines.delay(50)
+                val now = navigator.currentLocator.value
+                val hrefMoved = now.href != before.href
+                val progMoved =
+                    (now.locations.progression ?: -1.0) != (before.locations.progression ?: -1.0)
+                val posMoved = now.locations.position != before.locations.position
+                if (hrefMoved || progMoved || posMoved) return true
+            }
+            if (attempt == 0) swipe(forward)
+        }
+        return false
+    }
 
     override val publication: Publication? = null
 
@@ -188,6 +262,139 @@ class EpubReaderEngine internal constructor(
     // publication alongside the fragment instead of reaching into the fragment.
     override val publication: Publication = openedPublication
 
+    // ---------------------------------------------------------------- page turns
+    // Readium's OverflowableNavigator paging proved unreliable inside our Compose
+    // embedding (returns true without moving). Instead we navigate through the
+    // publication's per-screen POSITIONS list: every entry is a real Locator that
+    // navigator.go() resolves exactly — the same mechanism as restore-position.
+
+    private var positionsCache: List<Locator>? = null
+
+    private suspend fun screenPositions(): List<Locator> {
+        positionsCache?.let { return it }
+        val computed: List<Locator> =
+            runCatching {
+                openedPublication.positions()
+            }.getOrDefault(emptyList())
+        if (computed.isNotEmpty()) positionsCache = computed
+        return computed
+    }
+
+    private suspend fun turnByScreen(forward: Boolean): Boolean? {
+        val all = screenPositions()
+        if (all.isEmpty()) return null
+        val cur = currentLocator.value
+        val key = { l: Locator -> l.href.toString().substringBefore('#') }
+        val curKey = key(cur)
+        val prog = cur.locations.progression ?: 0.0
+
+        val inResource = all.withIndex().filter { key(it.value) == curKey }
+        if (inResource.isEmpty()) return null
+
+        // Half-a-screen tolerance: the live locator's continuous progression can sit
+        // anywhere inside the current screen; comparing with 1e-9 could select the
+        // ALREADY-VISIBLE position and loop forever reporting success.
+        val eps = 0.5 / inResource.size.coerceAtLeast(1)
+
+        val target: Locator? = if (forward) {
+            inResource.firstOrNull { (it.value.locations.progression ?: 0.0) > prog + eps }
+                ?.value
+                // At end of resource → first position of the next reading-order item.
+                ?: nextResourceFirstPosition(all, curKey)
+        } else {
+            inResource.lastOrNull { (it.value.locations.progression ?: 0.0) < prog - eps }
+                ?.value
+                ?: previousResourceLastPosition(all, curKey)
+        }
+        val loc = target ?: return null
+        return try {
+            val ok = navigator.go(loc, false)
+            Log.d(
+                ReaderEngine.TAG,
+                "turn fwd=$forward prog=$prog -> ${loc.href} ${loc.locations.progression} ok=$ok",
+            )
+            ok
+        } catch (e: Exception) {
+            Log.w(ReaderEngine.TAG, "turnByScreen go failed", e)
+            false
+        }
+    }
+
+    private fun nextResourceFirstPosition(all: List<Locator>, curHrefKey: String): Locator? {
+        val order = openedPublication.readingOrder
+        val idx = order.indexOfFirst { it.href.toString().substringBefore('#') == curHrefKey }
+        if (idx == -1 || idx + 1 >= order.size) return null
+        val nextKey = order[idx + 1].href.toString().substringBefore('#')
+        return all.firstOrNull { it.href.toString().substringBefore('#') == nextKey }
+    }
+
+    private fun previousResourceLastPosition(all: List<Locator>, curHrefKey: String): Locator? {
+        val order = openedPublication.readingOrder
+        val idx = order.indexOfFirst { it.href.toString().substringBefore('#') == curHrefKey }
+        if (idx <= 0) return null
+        val prevKey = order[idx - 1].href.toString().substringBefore('#')
+        return all.lastOrNull { it.href.toString().substringBefore('#') == prevKey }
+    }
+
+    private fun jsTurnJs(forward: Boolean): String {
+        // Paginated reflowable lays content out in columns exactly one viewport
+        // wide. We address them by ABSOLUTE index — incremental deltas accumulate
+        // rounding error that makes the paginator snap back a column (the
+        // "previous page shows up" bug).
+        return "(function(){var d=document.scrollingElement||document.documentElement;" +
+            "var vpW=window.innerWidth;" +
+            "var maxL=d.scrollWidth-vpW;if(maxL<=10)return 'edge';" +
+            "var cur=Math.round(d.scrollLeft/vpW);" +
+            "var n=cur" + (if (forward) "+1" else "-1") + ";" +
+            "if(n<0||(n*vpW)>maxL+1)return 'edge';" +
+            "var before=d.scrollLeft;d.scrollLeft=n*vpW;" +
+            "return (d.scrollLeft!==before)?('moved:'+before+'->'+d.scrollLeft):'stuck';})()"
+    }
+
+    /** Snaps the webview onto the nearest exact column boundary, healing drift. */
+    private fun jsAlignJs(): String =
+        "(function(){var d=document.scrollingElement||document.documentElement;" +
+            "var vpW=window.innerWidth;if(d.scrollWidth-vpW<=10)return 'flat';" +
+            "var s=Math.round(d.scrollLeft/vpW)*vpW;" +
+            "if(s!==d.scrollLeft){d.scrollLeft=s;return 'aligned:'+d.scrollLeft;}" +
+            "return 'ok';})()"
+
+    private suspend fun tryJsTurn(forward: Boolean): Boolean? {
+        val evaluator = webViewEvaluator ?: return null
+        val result = kotlinx.coroutines.withTimeoutOrNull(1500) {
+            kotlinx.coroutines.suspendCancellableCoroutine<String?> { cont ->
+                evaluator(jsTurnJs(forward)) { res -> cont.resume(res) }
+            }
+        }
+        Log.d(ReaderEngine.TAG, "jsTurn forward=$forward -> $result")
+        val moved = when {
+            result == null -> null
+            result.contains("moved") -> true
+            // 'edge' or 'stuck' → let the caller try exact-position navigation.
+            else -> false
+        }
+        if (moved == true) {
+            kotlinx.coroutines.delay(120)
+            evaluator(jsAlignJs()) { }
+        }
+        return moved
+    }
+
+    override suspend fun next(): Boolean {
+        if (tryJsTurn(true) == true) return true
+        if (tryNativeSwipe(true) == true) return true
+        return turnByScreen(true) ?: super.next()
+    }
+
+    override suspend fun previous(): Boolean {
+        if (tryJsTurn(false) == true) return true
+        if (tryNativeSwipe(false) == true) return true
+        return turnByScreen(false) ?: super.previous()
+    }
+
+    /** Settings captured before the fragment attached; flushed by [flushPendingSettings]. */
+    private var pendingPreferences: EpubPreferences? = null
+
     override suspend fun currentSelection(): EngineSelection? = try {
         fragment.currentSelection()?.let { sel ->
             EngineSelection(locator = sel.locator, text = sel.locator.text.highlight.orEmpty())
@@ -216,18 +423,41 @@ class EpubReaderEngine internal constructor(
         // hyphens, imageFilter, language, letterSpacing, ligatures, lineHeight, marginHorizontal,
         // marginBottom, marginVertical, pageMargins(Boolean), readingProgression, scroll, spread,
         // textAlign, textColor, textNormalization, theme, typeScale, wordSpacing.
+        // Readium 3.1.0 validates EpubPreferences in its constructor (require()):
+        // fontSize >= 0, fontWeight in 0..2.5 as a MULTIPLIER of the base weight
+        // (not CSS 100-900!), letterSpacing/wordSpacing/pageMargins >= 0. Sanitize
+        // every value so a stored CSS-style setting can never throw here.
         val prefs = EpubPreferences(
             fontFamily = settings.fontFamily?.let { FontFamily(it) },
-            fontSize = settings.fontSizeSp?.let { (it / ReaderEngine.BASE_FONT_SIZE_SP).toDouble() },
-            fontWeight = settings.fontWeight?.toDouble(),
-            lineHeight = settings.lineHeight?.toDouble(),
-            letterSpacing = settings.letterSpacing?.toDouble(),
-            wordSpacing = settings.paragraphSpacing?.toDouble(),
+            fontSize = settings.fontSizeSp?.let { (it / ReaderEngine.BASE_FONT_SIZE_SP).toDouble().coerceAtLeast(0.0) },
+            fontWeight = settings.fontWeight?.let { (it.toDouble() / 400.0).coerceIn(0.5, 2.5) },
+            lineHeight = settings.lineHeight?.toDouble()?.coerceAtLeast(1.0),
+            letterSpacing = settings.letterSpacing?.toDouble()?.coerceAtLeast(0.0),
+            wordSpacing = settings.paragraphSpacing?.toDouble()?.coerceAtLeast(0.0),
             scroll = settings.paginated?.not(),
             textAlign = settings.textAlign?.let { readiumTextAlign(it) },
             theme = settings.theme?.let { readiumTheme(it) },
         )
-        fragment.submitPreferences(prefs)
+        // submitPreferences() touches the navigator's ViewModel, which throws
+        // "Can't access ViewModels from detached fragment" when called between
+        // instantiate() and the fragment transaction — defer until attached.
+        if (fragment.isAdded) {
+            fragment.submitPreferences(prefs)
+        } else {
+            pendingPreferences = prefs
+        }
+    }
+
+    override fun flushPendingSettings() {
+        if (pendingPreferences == null) return
+        engineScope.launch {
+            while (!fragment.isAdded && isActive) delay(50)
+            pendingPreferences?.let { prefs ->
+                runCatching { fragment.submitPreferences(prefs) }
+                    .onFailure { Log.w(ReaderEngine.TAG, "Deferred applySettings failed", it) }
+            }
+            pendingPreferences = null
+        }
     }
 
     private fun readiumTheme(name: String): Theme? = when (name.lowercase()) {
@@ -308,7 +538,6 @@ object ReaderEngineFactory {
         } catch (e: Exception) {
             throw ReaderOpenException("Failed to open ${publicationFile.name}: ${e.message}", e)
         } ?: throw ReaderOpenException("Unsupported or corrupted file: ${publicationFile.name}")
-
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
         return when {
@@ -343,10 +572,16 @@ object ReaderEngineFactory {
         initialLocator: Locator?,
     ): EpubNavigatorFragment {
         val navFactory = EpubNavigatorFactory(publication, EpubNavigatorFactory.Configuration())
+        // createFragmentFactory's 2nd parameter is the READING ORDER override — passing an
+        // empty list there made EpubNavigatorFragment crash with
+        // NoSuchElementException ("List is empty") on readingOrder.first(). Omit it so
+        // Readium uses publication.readingOrder (Kotlin default argument).
+        val openLocator: Locator = initialLocator
+            ?: fallbackLocator(publication)
+            ?: throw ReaderOpenException("Publication has no readable content")
         val fragmentFactory = navFactory.createFragmentFactory(
-            initialLocator ?: fallbackLocator(publication),
-            emptyList<Link>(),
-            EpubPreferences(),
+            initialLocator = openLocator,
+            initialPreferences = EpubPreferences(scroll = false),
             paginationListener = object : EpubNavigatorFragment.PaginationListener {
                 override fun onPageChanged(pageIndex: Int, pageCount: Int, locator: Locator) = Unit
                 override fun onPageLoaded() = Unit
@@ -361,11 +596,9 @@ object ReaderEngineFactory {
     /** First reading-order link as a locator, for opens without a stored position. */
     private fun fallbackLocator(publication: Publication): Locator? =
         publication.manifest.readingOrder.firstOrNull()?.let { link: Link ->
-            try {
-                Locator.fromJSON(JSONObject().put("href", link.href.toString()))
-            } catch (_: JSONException) {
-                null
-            }
+            // Same helper EpubNavigatorFragment uses internally; Locator.fromJSON
+            // silently returned null for plain relative hrefs like "c1.xhtml".
+            publication.locatorFromLink(link)
         }
 }
 

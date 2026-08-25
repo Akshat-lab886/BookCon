@@ -43,8 +43,16 @@ class MainActivity : AppCompatActivity() {
             }
             BookConTheme(themeMode = settings.themeMode) {
                 val session by sessions.session.collectAsStateWithLifecycle()
+                // A blank-token session is the pre-auth placeholder used to pin the API
+                // base URL — it must NOT count as "signed in" or the library switch would
+                // tear down the AuthViewModel mid-login and cancel the HTTP call.
+                val activeSession = session?.takeIf { it.accessToken.isNotBlank() }
                 val navController = rememberNavController()
-                BookConApp(navController = navController, session = session)
+                BookConApp(
+                    navController = navController,
+                    session = activeSession,
+                    localMode = settings.storageMode != "cloud",
+                )
             }
         }
     }

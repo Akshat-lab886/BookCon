@@ -18,6 +18,7 @@ import javax.inject.Singleton
 @Singleton
 class ApiProvider @Inject constructor(
     private val sessions: SessionStore,
+    private val refresher: TokenRefresher,
 ) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -30,7 +31,7 @@ class ApiProvider @Inject constructor(
         OkHttpClient.Builder()
             .addInterceptor(AuthInterceptor(sessions))
             .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
-            .authenticator(TokenAuthenticator(sessions) { get() })
+            .authenticator(TokenAuthenticator(sessions, refresher))
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .build()
@@ -56,6 +57,6 @@ class ApiProvider @Inject constructor(
     }
 
     companion object {
-        const val DEFAULT_SERVER = "http://10.0.2.2:8000"
+        const val DEFAULT_SERVER = "http://127.0.0.1:8000"
     }
 }

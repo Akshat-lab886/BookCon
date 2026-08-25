@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
@@ -195,6 +196,15 @@ fun AuthScreen(
                 } else {
                     Text(if (state.registerMode) "Create account" else "Sign in")
                 }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // Local Vault: use the app fully offline, no account required.
+            TextButton(
+                onClick = { viewModel.useLocalOnly() },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Use without an account (this device only)")
             }
             Spacer(Modifier.height(8.dp))
 
