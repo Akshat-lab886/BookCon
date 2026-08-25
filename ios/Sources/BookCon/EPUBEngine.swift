@@ -452,6 +452,6 @@ extension ReadiumEPUBEngine: EPUBNavigatorDelegate {
     public func navigator(_ navigator: Navigator, presentError error: NavigatorError) {
     }
 
-    public func navigator(_ navigator: Navigator, didFailToLoadResourceAt href: any RelativeURL, withError error: ReadError) {
+    public func navigator(_ navigator: Navigator, didFailToLoadResourceAt href: RelativeURL, withError error: ReadError) {
     }
 }

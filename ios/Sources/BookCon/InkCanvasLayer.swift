@@ -104,7 +104,7 @@ struct PencilKitCanvas: UIViewRepresentable {
         Coordinator(controller: controller, bookId: bookId)
     }
 
-    func makeUIViewController(context: Context) -> PKCanvasView {
+    func makeUIView(context: Context) -> PKCanvasView {
         let canvas = PKCanvasView()
         canvas.drawingPolicy = .anyInput
         canvas.isOpaque = false
@@ -114,7 +114,7 @@ struct PencilKitCanvas: UIViewRepresentable {
         return canvas
     }
 
-    func updateUIViewController(_ uiViewController: PKCanvasView, context: Context) {
+    func updateUIView(_ uiView: PKCanvasView, context: Context) {
         let coordinator = context.coordinator
         coordinator.setPageProvider(pageProvider)
         coordinator.ensureObservingPdfView()
