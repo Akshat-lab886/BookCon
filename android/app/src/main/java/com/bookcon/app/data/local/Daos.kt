@@ -172,6 +172,12 @@ interface OrganizeDao {
     @Query("SELECT * FROM series WHERE deletedAt IS NULL ORDER BY name ASC")
     fun observeSeries(): Flow<List<SeriesEntity>>
 
+    @Query("SELECT * FROM tags WHERE id = :id LIMIT 1")
+    suspend fun tagById(id: String): TagEntity?
+
+    @Query("SELECT * FROM series WHERE id = :id LIMIT 1")
+    suspend fun seriesById(id: String): SeriesEntity?
+
     @Query("SELECT * FROM shelves WHERE dirty = 1")
     suspend fun dirtyShelves(): List<ShelfEntity>
 

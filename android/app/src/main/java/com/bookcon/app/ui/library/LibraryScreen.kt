@@ -120,6 +120,7 @@ fun LibraryScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var dialog by remember { mutableStateOf<Dlg>(Dlg.None) }
+    var pendingDelete by remember { mutableStateOf<Pair<OrgItem, String>?>(null) }
     var sortMenuOpen by remember { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
 
@@ -285,22 +286,24 @@ fun LibraryScreen(
             )
             LibTab.SERIES -> OrganizeTabContent(
                 title = "Series",
-                hint = null,
+                hint = "Long-press a series to delete it.",
                 items = state.series.map { OrgItem(it.id, it.name, state.countBySeries[it.id] ?: 0) },
                 emptyHint = "No series yet.",
                 onCreate = { dialog = Dlg.CreateSeries },
                 onSelect = null,
                 activeId = null,
+                onDelete = { id -> state.series.find { it.id == id }?.let { pendingDelete = OrgItem(it.id, it.name, 0) to "series" } },
                 modifier = Modifier.padding(padding),
             )
             LibTab.TAGS -> OrganizeTabContent(
                 title = "Tags",
-                hint = "Tapping a tag filters the library.",
+                hint = "Tap to filter. Long-press to delete.",
                 items = state.tags.map { OrgItem(it.id, it.name, state.countByTag[it.id] ?: 0) },
                 emptyHint = "No tags yet. Tag books to slice your library.",
                 onCreate = { dialog = Dlg.CreateTag },
                 onSelect = viewModel::setTagFilter,
                 activeId = state.filterTagId,
+                onDelete = { id -> state.tags.find { it.id == id }?.let { pendingDelete = OrgItem(it.id, it.name, 0) to "tag" } },
                 modifier = Modifier.padding(padding),
             )
         }
@@ -312,6 +315,25 @@ fun LibraryScreen(
         Dlg.CreateShelf -> NameDialog("New shelf", onCancel = { dialog = Dlg.None }) { viewModel.createShelf(it); dialog = Dlg.None }
         Dlg.CreateTag -> NameDialog("New tag", onCancel = { dialog = Dlg.None }) { viewModel.createTag(it); dialog = Dlg.None }
         Dlg.CreateSeries -> NameDialog("New series", onCancel = { dialog = Dlg.None }) { viewModel.createSeries(it); dialog = Dlg.None }
+        else -> Unit
+    }
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete ${target.second}?") },
+            text = { Text("Delete \"${target.first.name}\"? Your books won't be deleted.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (target.second == "series") viewModel.deleteSeries(target.first.id)
+                    else viewModel.deleteTag(target.first.id)
+                    pendingDelete = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
+        )
+    }
+    when (dialog) {
+        Dlg.None, Dlg.CreateShelf, Dlg.CreateTag, Dlg.CreateSeries -> Unit
         Dlg.MoveToShelf -> MoveToShelfDialog(
             shelves = state.shelves,
             onCancel = { dialog = Dlg.None },
@@ -754,6 +776,7 @@ private fun OrganizeTabContent(
     onSelect: ((String) -> Unit)?,
     activeId: String?,
     modifier: Modifier = Modifier,
+    onDelete: ((String) -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -791,7 +814,10 @@ private fun OrganizeTabContent(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (onSelect != null) Modifier.clickable { onSelect(item.id) } else Modifier)
+                        .combinedClickable(
+                            onClick = { onSelect?.invoke(item.id) },
+                            onLongClick = { onDelete?.invoke(item.id) },
+                        )
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                 ) {
                     Text(

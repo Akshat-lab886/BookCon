@@ -462,6 +462,26 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    /** Soft-deletes locally (offline-first), then best-effort remote delete. */
+    fun deleteTag(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val tag = organizeDao.tagById(id) ?: return@launch
+            organizeDao.upsertTag(tag.copy(deletedAt = nowIso(), dirty = true))
+            runCatching { apiProvider.get().deleteTag(id) }
+            if (state.value.filterTagId == id) setTagFilter(null)
+            _events.send(LibraryEvent.Snackbar("Tag deleted"))
+        }
+    }
+
+    fun deleteSeries(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val series = organizeDao.seriesById(id) ?: return@launch
+            organizeDao.upsertSeries(series.copy(deletedAt = nowIso(), dirty = true))
+            runCatching { apiProvider.get().deleteSeries(id) }
+            _events.send(LibraryEvent.Snackbar("Series deleted"))
+        }
+    }
+
     fun createTag(name: String) {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return

@@ -97,6 +97,9 @@ interface ApiService {
     @POST("series")
     suspend fun createSeries(@Body body: NameRequest): Response<SeriesDto>
 
+    @DELETE("series/{seriesId}")
+    suspend fun deleteSeries(@Path("seriesId") seriesId: String): Response<Void>
+
     // Reading --------------------------------------------------------------------------
     @GET("annotations")
     suspend fun annotations(
