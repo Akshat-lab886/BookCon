@@ -17,9 +17,8 @@ import WebKit
 // MARK: - Routing gate
 
 enum EPUBRoute {
-    /// The single boolean switch used by `EPUBReaderView` to choose between the
-    /// Readium-backed engine (`true`) and `EPUBFallbackReader` (`false`).
-    static var useReadium: Bool { true }
+    static var useReadium: Bool { false }
+}
 }
 
 // MARK: - Progress throttle (shared utility)

@@ -1,3 +1,4 @@
+#if BOOKCON_ENABLE_READIUM
 //
 //  EPUBEngine.swift
 //  BookCon
@@ -455,3 +456,5 @@ extension ReadiumEPUBEngine: EPUBNavigatorDelegate {
     public func navigator(_ navigator: Navigator, didFailToLoadResourceAt href: RelativeURL, withError error: ReadError) {
     }
 }
+
+#endif
