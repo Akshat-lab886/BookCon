@@ -30,11 +30,17 @@ jobs:
       - name: Build (iOS Simulator)
         working-directory: ios
         run: |
-          set -o pipefail
           DEST=$(xcrun simctl list devices available | grep -m1 "iPhone" | sed -E 's/.*\(([A-F0-9-]{36})\).*/\1/')
           echo "Destination UDID: $DEST"
+          set +e
           xcodebuild -project BookCon.xcodeproj -scheme BookCon \
-            -destination "id=$DEST" -derivedDataPath .dd build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -80
+            -destination "id=$DEST" -derivedDataPath .dd build CODE_SIGNING_ALLOWED=NO > full-build.log 2>&1
+          STATUS=$?
+          echo "=== ERRORS ==="
+          grep -E "\.swift:[0-9]+:[0-9]+: error" full-build.log | sort -u | head -60
+          echo "=== TAIL ==="
+          tail -25 full-build.log
+          exit $STATUS
 
       - name: Boot simulator + install + launch + screenshot
         continue-on-error: true
@@ -58,5 +64,6 @@ jobs:
           path: |
             ios/.dd/Build/Products/**/*.app
             ios/shots/*.png
+            ios/full-build.log
           if-no-files-found: warn
           retention-days: 30
