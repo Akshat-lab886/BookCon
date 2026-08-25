@@ -17,6 +17,7 @@ object Routes {
     const val BOOK_ANNOTATIONS = "annotations/{bookId}"
     const val DEVICES = "settings/devices"
     const val STORAGE = "settings/storage"
+    const val AI_SETTINGS = "settings/ai"
 
     fun details(bookId: String) = "details/$bookId"
     fun reader(bookId: String) = "reader/$bookId"
@@ -74,6 +75,7 @@ fun BookConApp(
                     onBack = { navController.popBackStack() },
                     openDevices = { navController.navigate(Routes.DEVICES) },
                     openStorage = { navController.navigate(Routes.STORAGE) },
+                    openAiSummary = { navController.navigate(Routes.AI_SETTINGS) },
                     onSignedOut = {
                         navController.navigate(Routes.AUTH) {
                             popUpTo(Routes.LIBRARY) { inclusive = true }
@@ -86,6 +88,9 @@ fun BookConApp(
             }
             composable(Routes.STORAGE) {
                 com.bookcon.app.ui.settings.StorageManagerScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.AI_SETTINGS) {
+                com.bookcon.app.ui.settings.AiSettingsScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.ANNOTATIONS) {
                 com.bookcon.app.ui.annotations.AnnotationsScreen(

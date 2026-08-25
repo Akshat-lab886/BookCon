@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,9 +16,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,6 +71,7 @@ fun PdfPager(
     onUndoStroke: () -> Unit,
     onInkToolChange: (PdfInkTool) -> Unit,
     onInkColorChange: (String) -> Unit,
+    onSummarize: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -184,7 +188,7 @@ fun PdfPager(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Page indicator pill.
+        // Page indicator pill + AI page-summary shortcut (PDF top chrome).
         Surface(
             tonalElevation = 3.dp,
             color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -193,12 +197,19 @@ fun PdfPager(
                 .fillMaxWidth()
                 .padding(top = 28.dp),
         ) {
-            Text(
-                text = "$title · page ${pagerState.currentPage + 1} of ${pdf.pageCount}",
-                style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                maxLines = 1,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "$title · page ${pagerState.currentPage + 1} of ${pdf.pageCount}",
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 16.dp),
+                )
+                IconButton(onClick = onSummarize) {
+                    Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
+                }
+            }
         }
 
         // INK-2: floating pen button toggles the annotation toolbar.

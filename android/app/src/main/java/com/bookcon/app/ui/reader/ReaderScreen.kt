@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import com.bookcon.app.ui.reader.PdfInkToolBar
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material.icons.filled.Edit
@@ -46,19 +47,25 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -283,6 +290,7 @@ private fun ReaderContentHost(
                 onUndoStroke = viewModel::undoLastPdfStroke,
                 onInkToolChange = viewModel::setPdfInkTool,
                 onInkColorChange = viewModel::setPdfInkColor,
+                onSummarize = { viewModel.summarizeCurrentPage() },
                 modifier = Modifier.fillMaxSize(),
             )
 
@@ -464,6 +472,7 @@ private fun ReaderContentHost(
             ReaderTopBar(
                 title = state.chapterTitle.ifBlank { state.book?.title.orEmpty() },
                 remainingPercent = state.remainingPercent,
+                onSummarize = { viewModel.summarizeCurrentPage() },
                 onClose = onClose,
             )
         }
@@ -498,6 +507,18 @@ private fun ReaderContentHost(
             onDismissTapZoneEditor = onDismissTapZoneEditor,
             onEditTapZones = onEditTapZones,
         )
+
+        // In-reader AI page summary sheet — overlays both the PDF and EPUB render paths.
+        val summary by viewModel.summaryState.collectAsStateWithLifecycle()
+        if (summary.loading || summary.text != null || summary.error != null) {
+            SummarySheet(
+                state = summary,
+                subtitle = state.chapterTitle.ifBlank { state.book?.title.orEmpty() },
+                onRegenerate = { viewModel.regenerateSummary() },
+                onRetry = { viewModel.summarizeCurrentPage(forceRefresh = true) },
+                onDismiss = viewModel::dismissSummary,
+            )
+        }
             } // else (Readium engine)
         } // when (pdf / status / engine)
     } // Box
@@ -602,11 +623,98 @@ private fun ReaderStatusCard(state: ReaderUiState, onClose: () -> Unit) {
 
 // --------------------------------------------------------------------------------- chrome
 
-/** RD-13 top bar: chapter title, remaining %, battery stub, close. */
+/** In-reader AI page summary sheet (loading / text / error states from the ViewModel). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SummarySheet(
+    state: SummaryUiState,
+    subtitle: String?,
+    onRegenerate: () -> Unit,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 16.dp),
+        ) {
+            Text("Page summary", style = MaterialTheme.typography.titleMedium)
+            subtitle?.takeIf { it.isNotBlank() }?.let { label ->
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            when {
+                state.loading -> Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 40.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator()
+                }
+
+                state.error != null -> Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.Error,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp),
+                        )
+                        Text(
+                            text = state.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                    TextButton(onClick = onRetry) { Text("Retry") }
+                }
+
+                state.text != null -> Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    SelectionContainer {
+                        Text(text = state.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (state.fromCache) {
+                        Text(
+                            text = "cached",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = onRegenerate) { Text("Regenerate") }
+                        TextButton(onClick = onDismiss) { Text("Close") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** RD-13 top bar: chapter title, remaining %, AI summary, battery stub, close. */
 @Composable
 private fun ReaderTopBar(
     title: String,
     remainingPercent: Float?,
+    onSummarize: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -635,6 +743,9 @@ private fun ReaderTopBar(
                 style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
             )
+        }
+        IconButton(onClick = onSummarize) {
+            Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
         }
         BatteryStub(modifier = Modifier.padding(end = 8.dp))
     }

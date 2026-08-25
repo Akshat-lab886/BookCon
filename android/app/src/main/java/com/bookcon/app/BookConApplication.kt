@@ -19,6 +19,8 @@ class BookConApplication : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        // PDFBox-Android bootstrap (fonts/resources) for PDF text extraction — once per process.
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
         // Periodic background pull (PRD SYN-7 fallback; ≥15 min while connected).
         SyncScheduler.schedulePeriodic(this)
     }

@@ -132,6 +132,9 @@ dependencies {
     implementation(libs.readium.streamer)
     implementation(libs.readium.navigator)
 
+    // PDFBox-Android for PDF text extraction (in-reader AI page summaries)
+    implementation(libs.pdfbox.android)
+
     testImplementation(libs.junit)
     testImplementation(libs.turbine)
     androidTestImplementation(libs.androidx.junit)

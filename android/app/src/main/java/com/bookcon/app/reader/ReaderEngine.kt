@@ -112,6 +112,13 @@ interface ReaderEngine {
      */
     suspend fun search(query: String): List<EngineSearchHit> = emptyList()
 
+    /** 0-based index of the visible fixed-layout page (PDF), when the engine can know it. */
+    val currentPageIndex: Int?
+        get() = null
+
+    /** Returns (pageLabel, plainText) for the currently visible page, or null. */
+    fun currentPageText(): Pair<String, String>? = null
+
     fun applySettings(settings: EngineSettings) {}
 
     /**
@@ -211,6 +218,16 @@ abstract class CommonNavigatorEngine(
     private val overflowable: OverflowableNavigator? = navigator as? OverflowableNavigator
 
     override suspend fun currentSelection(): EngineSelection? = null
+
+    /**
+     * 0-based index of the currently visible fixed-layout page, when the engine can know it.
+     * PDFs render outside the navigator in this app (PdfBook/PdfPager path), so engines
+     * ship the null default for now.
+     */
+    override val currentPageIndex: Int? = null
+
+    /** Returns (pageLabel, plainText) for the currently visible page, or null. */
+    override fun currentPageText(): Pair<String, String>? = null
 
     // Readium 3.1.0: Navigator.go(Locator, animated): Boolean and
     // OverflowableNavigator.goForward/goBackward(animated): Boolean — plain, non-suspend.
@@ -402,6 +419,63 @@ class EpubReaderEngine internal constructor(
     } catch (e: Exception) {
         Log.w(ReaderEngine.TAG, "currentSelection failed", e)
         null
+    }
+
+    // ------------------------------------------------------------------ AI page text
+
+    /**
+     * Plain text of the visible EPUB screen, extracted from the current reading-order
+     * resource. Serves in-reader AI page summaries; null when nothing readable is open.
+     */
+    override fun currentPageText(): Pair<String, String>? {
+        val locator = currentLocator.value
+        val hrefKey = locator.href.toString().substringBefore('#')
+        val link = openedPublication.readingOrder.firstOrNull {
+            it.href.toString().substringBefore('#') == hrefKey
+        }
+        val resource = link?.let { openedPublication.get(it) } ?: return null
+
+        // The Resource API is suspend-only; summarizeCurrentPage calls this off the main
+        // thread (Dispatchers.IO), so bridge with runBlocking here.
+        val raw = kotlinx.coroutines.runBlocking {
+            runCatching {
+                val length = resource.length().getOrNull() ?: return@runCatching ByteArray(0)
+                if (length <= 0L) {
+                    ByteArray(0)
+                } else {
+                    resource.read(0 until length).getOrNull() ?: ByteArray(0)
+                }
+            }.getOrDefault(ByteArray(0))
+        }
+        if (raw.isEmpty()) return null
+
+        // XHTML → rough plain text: strip tags, decode the common entities, collapse space.
+        val text = String(raw, Charsets.UTF_8)
+            .let { Regex("<[^>]*>").replace(it, " ") }
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (text.isEmpty()) return null
+
+        // Long resources feed only a window around the visible progression so prompts stay bounded.
+        val window = if (text.length > 8000) {
+            val progression = locator.locations.progression
+            if (progression != null && progression in 0.0..1.0) {
+                val start = ((text.length * progression).toInt() - 2000).coerceAtLeast(0)
+                text.substring(start, minOf(text.length, start + 8000))
+            } else {
+                text.take(8000)
+            }
+        } else {
+            text
+        }
+
+        val label = locator.title ?: hrefKey.substringAfterLast('/')
+        return label to window
     }
 
     override suspend fun search(query: String): List<EngineSearchHit> {

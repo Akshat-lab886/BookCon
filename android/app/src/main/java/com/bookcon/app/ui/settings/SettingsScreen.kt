@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -64,6 +65,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     openDevices: () -> Unit,
     openStorage: () -> Unit,
+    openAiSummary: () -> Unit,
     onSignedOut: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -168,6 +170,15 @@ fun SettingsScreen(
                     headlineContent = { Text("Font, spacing, pagination…") },
                     supportingContent = { Text("Adjust while reading any book (reader toolbar)") },
                     leadingContent = { Icon(Icons.Filled.MenuBook, contentDescription = null) },
+                )
+            }
+
+            SectionCard("AI", icon = Icons.Outlined.AutoAwesome) {
+                ListItem(
+                    headlineContent = { Text("AI summary") },
+                    supportingContent = { Text("Bring your own key — summarize pages") },
+                    leadingContent = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                    modifier = Modifier.clickable(onClick = openAiSummary),
                 )
             }
 

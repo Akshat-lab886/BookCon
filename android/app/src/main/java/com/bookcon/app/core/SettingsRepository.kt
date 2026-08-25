@@ -61,6 +61,12 @@ data class AppSettings(
      * account needed), or "both" (account + manual local archive import/export).
      */
     val storageMode: String = "cloud",
+    /** BYOK AI page summarization provider: openai | gemini | custom. */
+    val aiProvider: String = "openai",
+    /** OpenAI-compatible base URL, used only when [aiProvider] == "custom". */
+    val aiBaseUrl: String = "",
+    /** Model id; blank → Summarizer.defaultModel([aiProvider]). */
+    val aiModel: String = "",
 ) {
     val localUsable: Boolean get() = storageMode != "cloud"
 }
@@ -99,6 +105,9 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     private val keyOrientationLock = stringPreferencesKey("orientation_lock")
     private val keyTapZones = stringPreferencesKey("reader_tap_zones_json")
     private val keyStorageMode = stringPreferencesKey("storage_mode")
+    private val keyAiProvider = stringPreferencesKey("ai_provider")
+    private val keyAiBaseUrl = stringPreferencesKey("ai_base_url")
+    private val keyAiModel = stringPreferencesKey("ai_model")
 
     val settings: StateFlow<AppSettings> = context.dataStore.data
         .map(::readSettings)
@@ -128,6 +137,19 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     /** cloud | local | both — see [AppSettings.storageMode]. */
     suspend fun setStorageMode(mode: String) {
         update { it.copy(storageMode = mode) }
+    }
+
+    /** openai | gemini | custom — see [AppSettings.aiProvider]. */
+    suspend fun setAiProvider(provider: String) {
+        update { it.copy(aiProvider = provider) }
+    }
+
+    suspend fun setAiBaseUrl(url: String) {
+        update { it.copy(aiBaseUrl = url.trim()) }
+    }
+
+    suspend fun setAiModel(model: String) {
+        update { it.copy(aiModel = model.trim()) }
     }
 
     private val keyLastSyncedAt = longPreferencesKey("last_synced_at")
@@ -166,6 +188,9 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         volumeKeyTurns = prefs[keyVolumeKeyTurns] ?: true,
         orientationLock = prefs[keyOrientationLock] ?: "system",
         storageMode = prefs[keyStorageMode] ?: "cloud",
+        aiProvider = prefs[keyAiProvider] ?: "openai",
+        aiBaseUrl = prefs[keyAiBaseUrl] ?: "",
+        aiModel = prefs[keyAiModel] ?: "",
         tapZonesJson = prefs[keyTapZones] ?: "",
     )
 
@@ -192,6 +217,9 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         this[keyOrientationLock] = s.orientationLock
         this[keyTapZones] = s.tapZonesJson
         this[keyStorageMode] = s.storageMode
+        this[keyAiProvider] = s.aiProvider
+        this[keyAiBaseUrl] = s.aiBaseUrl
+        this[keyAiModel] = s.aiModel
     }
 
     private fun jsonFloat(json: String, field: String): Float? =

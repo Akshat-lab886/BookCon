@@ -5,8 +5,11 @@ import android.graphics.Color
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.bookcon.app.core.AiKeyStore
 import com.bookcon.app.core.AppSettings
 import com.bookcon.app.core.SettingsRepository
+import com.bookcon.app.core.Summarizer
+import com.bookcon.app.core.SummaryCache
 import com.bookcon.app.data.local.AnnotationDao
 import com.bookcon.app.data.local.AnnotationEntity
 import com.bookcon.app.data.local.BookDao
@@ -68,6 +71,14 @@ data class SearchChapterGroup(
     val hits: List<EngineSearchHit>,
 )
 
+/** In-reader AI page summary sheet state (loading / text / error are mutually exclusive). */
+data class SummaryUiState(
+    val loading: Boolean = false,
+    val text: String? = null,
+    val error: String? = null,
+    val fromCache: Boolean = false,
+)
+
 data class ReaderUiState(
     val phase: ReaderPhase = ReaderPhase.LOADING,
     val statusMessage: String? = null,
@@ -124,6 +135,17 @@ class ReaderViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()
+
+    // AI page summaries: context-backed collaborators, constructed plainly like the
+    // DataStore repository (no DI bindings yet).
+    private val aiKeyStore by lazy { AiKeyStore(appContext) }
+    private val summaryCache by lazy { SummaryCache(appContext) }
+    private val summarizer = Summarizer()
+
+    private var summaryJob: Job? = null
+
+    private val _summaryState = MutableStateFlow(SummaryUiState())
+    val summaryState: StateFlow<SummaryUiState> = _summaryState.asStateFlow()
 
     val settings: StateFlow<AppSettings> = settingsRepository.settings
 
@@ -721,6 +743,111 @@ class ReaderViewModel @Inject constructor(
         _state.value.tableOfContents
             .firstOrNull { Locators.normalizeHref(it.href.toString()) == href }
             ?.title
+
+    // ------------------------------------------------------- AI page summaries (in-reader)
+
+    fun dismissSummary() {
+        summaryJob?.cancel()
+        summaryJob = null
+        _summaryState.value = SummaryUiState()
+    }
+
+    /** Sheet button: re-run the summary for the visible page, bypassing the cache. */
+    fun regenerateSummary() {
+        summarizeCurrentPage(forceRefresh = true)
+    }
+
+    /**
+     * Summarizes the currently visible page. Cache-first unless [forceRefresh]; every
+     * failure surfaces as a message in [summaryState] instead of crashing the reader.
+     */
+    fun summarizeCurrentPage(forceRefresh: Boolean = false) {
+        if (_summaryState.value.loading) return
+        summaryJob?.cancel()
+        _summaryState.value = SummaryUiState(loading = true)
+
+        val pageKey = currentPageSummaryKey()
+        if (!forceRefresh) {
+            summaryCache.get(bookId, pageKey)?.let { cached ->
+                _summaryState.value = SummaryUiState(text = cached, fromCache = true)
+                return
+            }
+        }
+
+        summaryJob = viewModelScope.launch {
+            if (!com.bookcon.app.core.Net.isOnline(appContext)) {
+                _summaryState.value = SummaryUiState(
+                    error = "AI summaries need internet. Connect and try again.",
+                )
+                return@launch
+            }
+
+            val apiKey = withContext(Dispatchers.IO) { aiKeyStore.get() }
+            if (apiKey.isBlank()) {
+                _summaryState.value = SummaryUiState(
+                    error = "Add your API key in Settings → AI summary.",
+                )
+                return@launch
+            }
+
+            val settings = settingsRepository.settings.value
+            val pageInfo = withContext(Dispatchers.IO) { currentPageTextInfo() }
+            if (pageInfo == null || pageInfo.second.isBlank()) {
+                _summaryState.value = SummaryUiState(error = "Couldn't read text on this page.")
+                return@launch
+            }
+
+            val result = withContext(Dispatchers.IO) {
+                summarizer.summarize(
+                    provider = settings.aiProvider,
+                    baseUrl = settings.aiBaseUrl,
+                    apiKey = apiKey,
+                    model = settings.aiModel.ifBlank {
+                        Summarizer.defaultModel(settings.aiProvider)
+                    },
+                    bookTitle = _state.value.book?.title.orEmpty(),
+                    pageLabel = pageInfo.first,
+                    pageText = pageInfo.second,
+                )
+            }
+            result.fold(
+                onSuccess = { summary ->
+                    runCatching {
+                        withContext(Dispatchers.IO) { summaryCache.put(bookId, pageKey, summary) }
+                    }
+                    _summaryState.value = SummaryUiState(text = summary)
+                },
+                onFailure = { t ->
+                    Log.w(TAG, "Page summarization failed", t)
+                    _summaryState.value = SummaryUiState(
+                        error = t.message ?: "Couldn't summarize this page.",
+                    )
+                },
+            )
+        }
+    }
+
+    /** Stable per-position cache key: "epub:<href>#<pos|prog>" or "pdf:<pageIndex>". */
+    private fun currentPageSummaryKey(): String {
+        val engine = _state.value.engine
+        if (engine != null) {
+            val locator = engine.currentLocator.value
+            val href = locator.href.toString().substringBefore('#')
+            val pos = locator.locations.position?.toString()
+                ?: locator.locations.progression?.let { ((it * 1000).toInt()).toString() }
+                ?: "0"
+            return "epub:$href#$pos"
+        }
+        return "pdf:$pdfCurrentPage"
+    }
+
+    /**
+     * Uniform (pageLabel, plainText) for the visible page across both render paths:
+     * Readium EPUB engines and our own PdfRenderer pager (no navigator).
+     */
+    private fun currentPageTextInfo(): Pair<String, String>? =
+        _state.value.engine?.currentPageText()
+            ?: _state.value.pdfBook?.currentPageText(pdfCurrentPage)
 
     // --------------------------------------------------------------------- bookmarks (RD-10)
 

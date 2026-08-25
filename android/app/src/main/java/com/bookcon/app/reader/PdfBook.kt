@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import java.io.Closeable
 import java.io.File
 
@@ -16,6 +18,7 @@ import java.io.File
  * serialized through [lock].
  */
 class PdfBook private constructor(
+    private val file: File,
     private val fd: ParcelFileDescriptor,
     private val renderer: PdfRenderer,
 ) : Closeable {
@@ -43,6 +46,27 @@ class PdfBook private constructor(
         }
     }
 
+    /**
+     * Extracts plain text of page [index] (0-based) via PDFBox for AI page summaries.
+     * Opens its own read-only handle on the file so the shared renderer fd stays untouched.
+     * Returns (pageLabel, text), or null when the page has no extractable text.
+     * Call off the main thread.
+     */
+    fun currentPageText(index: Int): Pair<String, String>? {
+        if (index !in 0 until pageCount) return null
+        val label = "Page ${index + 1}"
+        return runCatching {
+            PDDocument.load(file).use { doc ->
+                PDFTextStripper().apply {
+                    startPage = index + 1
+                    endPage = index + 1
+                }.getText(doc)
+            }
+        }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { label to it.trim() }
+    }
+
     override fun close() {
         synchronized(lock) {
             runCatching { renderer.close() }
@@ -65,7 +89,7 @@ class PdfBook private constructor(
         fun open(file: File): PdfBook {
             val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
             try {
-                return PdfBook(fd, PdfRenderer(fd))
+                return PdfBook(file, fd, PdfRenderer(fd))
             } catch (t: Throwable) {
                 runCatching { fd.close() }
                 throw t
