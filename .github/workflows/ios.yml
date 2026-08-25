@@ -58,6 +58,7 @@ jobs:
           ls -la shots || true
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: BookCon-iOS-Simulator
