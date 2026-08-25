@@ -20,3 +20,6 @@
 # Readium
 -keep class org.readium.** { *; }
 -dontwarn org.readium.**
+
+# PDFBox-Android: JP2Decoder is an optional JPEG2000 dependency we do not ship
+-dontwarn com.gemalto.jp2.**
