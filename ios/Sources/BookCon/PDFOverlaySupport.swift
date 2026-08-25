@@ -117,4 +117,3 @@ enum InkStyles {
         PKEraserTool(.vector)
     }
 }
-}
