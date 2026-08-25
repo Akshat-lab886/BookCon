@@ -25,6 +25,7 @@ import ReadiumAdapterGCDWebServer
 
 /// Implemented by the SwiftUI hosting layer (see EPUBReaderView.swift).
 /// Deliberately tiny and Readium-free.
+@MainActor
 protocol EPUBEngineHost: AnyObject {
     /// Estimated overall reading progress in the 0...100 range.
     func engineDidUpdateProgress(pct: Double)
@@ -336,7 +337,7 @@ final class ReadiumEPUBEngine: NSObject {
         navigator.setDecorations(currentDecorations(), in: Self.highlightGroup)
     }
 
-    private func currentDecorations() -> [Decoration<CssStyle>] {
+    private func currentDecorations() -> [Decoration] {
         highlights.compactMap { stored in
             let tint = Self.highlightTints[stored.tintIndex % Self.highlightTints.count]
             // VERIFY-CI: `Decoration.Style.Highlight(tint:activity:)` memberwise
@@ -349,8 +350,7 @@ final class ReadiumEPUBEngine: NSObject {
             return Decoration(
                 id: stored.id,
                 locator: stored.locator,
-                style: style, // VERIFY-CI: EPUB navigators decorate with `Decoration<CssStyle>`;
-                              // if the compiler demands it, replace with `style.cssStyle()`.
+                style: style,
                 activatable: .action({ [weak self] tappedID, _ in
                     // VERIFY-CI: `Decoration.Activatable.action` handler signature
                     // `(_ id: String, _ event: Event) -> Void` (3.x). Tap-to-remove;
@@ -446,5 +446,12 @@ extension ReadiumEPUBEngine: EPUBNavigatorDelegate {
     /// Explicit jumps (TOC, internal links, restore) land here.
     public func navigator(_ navigator: Navigator, didJumpTo locator: Locator) {
         reportProgress(locator)
+    }
+
+    /// Required by `NavigatorDelegate` — surface errors as a silent no-op in v1.
+    public func navigator(_ navigator: Navigator, presentError error: NavigatorError) {
+    }
+
+    public func navigator(_ navigator: Navigator, didFailToLoadResourceAt href: any RelativeURL, withError error: ReadError) {
     }
 }

@@ -100,18 +100,21 @@ enum InkStyles {
     static let markerWidth: CGFloat = 12
     static let markerAlpha: CGFloat = 0.4
 
-    static var penTool: PKToolPen {
-        let color = UIColor.black
-        return PKToolPen(ink: PKInk(.pen, color: color), color: color, width: penWidth)
+    static var penTool: PKTool {
+        PKInkingTool(.pen, color: .black, width: penWidth)
     }
 
-    static var markerTool: PKToolMarker {
-        // Alpha lives in the ink color, so strokes render translucent.
-        let color = UIColor.yellow.withAlphaComponent(markerAlpha)
-        return PKToolMarker(ink: PKInk(.marker, color: color), color: color, width: markerWidth)
+    static var markerTool: PKTool {
+        if #available(iOS 17.0, *) {
+            // Alpha lives in the ink color, so strokes render translucent.
+            let color = UIColor.yellow.withAlphaComponent(markerAlpha)
+            return PKInkingTool(.marker, color: color, width: markerWidth)
+        }
+        return PKInkingTool(.pen, color: .yellow, width: markerWidth)
     }
 
-    static var eraserTool: PKToolEraser {
-        PKToolEraser(.vector)
+    static var eraserTool: PKTool {
+        PKEraserTool(.vector)
     }
+}
 }

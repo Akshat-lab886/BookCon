@@ -12,7 +12,7 @@
 import SwiftUI
 import PDFKit
 
-struct PDFKitView: UIViewControllerRepresentable {
+struct PDFKitView: UIViewRepresentable {
 
     let book: Book
 
@@ -32,7 +32,7 @@ struct PDFKitView: UIViewControllerRepresentable {
         Coordinator(pageIndex: $currentPageIndex)
     }
 
-    func makeUIViewController(context: Context) -> PDFView {
+    func makeUIView(context: Context) -> PDFView {
         let pdfView = PDFView()
         pdfView.document = PDFDocument(url: LibraryStore.shared.url(for: book))
         pdfView.displayMode = .singlePageContinuous
@@ -53,7 +53,7 @@ struct PDFKitView: UIViewControllerRepresentable {
         return pdfView
     }
 
-    func updateUIViewController(_ uiViewController: PDFView, context: Context) {
+    func updateUIView(_ pdfView: PDFView, context: Context) {
         // Nothing to refresh here; the coordinator's observer keeps the page
         // binding current as the user scrolls.
     }
