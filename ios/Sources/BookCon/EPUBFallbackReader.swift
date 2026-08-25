@@ -19,7 +19,6 @@ import WebKit
 enum EPUBRoute {
     static var useReadium: Bool { false }
 }
-}
 
 // MARK: - Progress throttle (shared utility)
 
