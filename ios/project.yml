@@ -18,6 +18,7 @@ targets:
         products:
           - ReadiumShared
           - ReadiumNavigator
+          - ReadiumAdapterGCDWebServer
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bookcon.ios

@@ -4,7 +4,8 @@
 //
 //  READIUM ISOLATION BOUNDARY (referred to in design docs as "ReadiumEngine").
 //  This is the ONE AND ONLY file in the app allowed to `import ReadiumShared` /
-//  `import ReadiumNavigator`. Everything the rest of the app touches is plain
+//  `import ReadiumNavigator
+import ReadiumAdapterGCDWebServer`. Everything the rest of the app touches is plain
 //  Foundation/UIKit types: `EPUBEngineHost`, `[String]` highlight JSON, and an
 //  opaque `Any` publication box. If Readium 3.2.0 API shapes drift, only this
 //  file should need fixing — risky spots carry `// VERIFY-CI:` comments.
@@ -18,6 +19,7 @@ import UIKit
 
 import ReadiumShared
 import ReadiumNavigator
+import ReadiumAdapterGCDWebServer
 
 // MARK: - Host contract (the entire surface the app sees)
 
@@ -143,8 +145,15 @@ final class ReadiumEPUBEngine: NSObject {
         // VERIFY-CI: DefaultPublicationParser init parameter labels for 3.2.0
         // (`httpClient:` / `pdfFactory:`). Earlier 3.x also accepted an optional
         // `audioFactory:`; omitting it is forward/backward compatible.
+        let httpClient = DefaultHTTPClient()
+        let assetRetriever = AssetRetriever(
+            formatSniffer: DefaultFormatSniffer(),
+            resourceFactory: ResourceFactory(httpClient: httpClient),
+            archiveOpener: DefaultArchiveOpener()
+        )
         let parser = DefaultPublicationParser(
-            httpClient: DefaultHTTPClient(),
+            httpClient: httpClient,
+            assetRetriever: assetRetriever,
             pdfFactory: DefaultPDFDocumentFactory()
         )
 
@@ -156,7 +165,11 @@ final class ReadiumEPUBEngine: NSObject {
         //     a `Link?`, or a `Source` (e.g. `.file(url)`).
         // The variant below (positional URL) is the most commonly documented
         // form; adjust only the call expression if it does not compile.
-        let publication = try await opener.open(fileURL, allowUserInteraction: true, warnings: nil)
+        guard let absURL = AbsoluteURL(fileURL) else {
+            throw EngineError.cancelled
+        }
+        let asset = try await assetRetriever.retrieve(url: absURL, hints: FormatHints()).get()
+        let publication = try await opener.open(asset: asset, allowUserInteraction: false).get()
 
         return PublicationBox(publication: publication)
     }
@@ -198,27 +211,19 @@ final class ReadiumEPUBEngine: NSObject {
 
     private func makeNavigator(initialPct: Double) -> EPUBNavigatorViewController? {
         let locator = initialLocator(forPct: initialPct)
-        let progression: BookProgression = locator.map { BookProgression.initial($0) } ?? .last
-        // VERIFY-CI: `BookProgression` cases (`.last` / `.initial(Locator)`).
-
-        // VERIFY-CI: EPUBNavigatorViewController 3.x initializer. Documented 3.x
-        // variant (chosen here):
-        //   init(publication:initialLocation:initialPreferences:readingOrder:
-        //        resources:bookProgression:config:delegate:)
-        // where `readingOrder` / `resources` take the publication's `[Link]`
-        // lists (they also default to the publication's own lists when omitted).
-        // 2.x used `init(publication:publicationIdentifier:bookId:initialLocation:config:)`
-        // — do NOT revert to that shape.
-        return EPUBNavigatorViewController(
-            publication: publication,
-            initialLocation: locator,
-            initialPreferences: EPUBPreferences(), // VERIFY-CI: memberwise default init
-            readingOrder: publication.readingOrder,
-            resources: publication.resources,
-            bookProgression: progression,
-            config: EPUBNavigatorViewController.Configuration(), // VERIFY-CI: `Config` -> `Configuration` rename in 3.x
-            delegate: self
-        )
+        // Verified against swift-toolkit 3.2.0 sources:
+        // convenience init(publication:initialLocation:readingOrder:config:httpServer:)
+        do {
+            return try EPUBNavigatorViewController(
+                publication: publication,
+                initialLocation: locator,
+                readingOrder: nil,
+                config: .init(preferences: EPUBPreferences()),
+                httpServer: GCDHTTPServer()
+            )
+        } catch {
+            return nil
+        }
     }
 
     /// Nearest position locator for a 0...100 percentage, used to restore the
