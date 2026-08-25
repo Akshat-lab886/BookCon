@@ -24,14 +24,18 @@ struct EPUBReaderView: View {
     // MARK: State
 
     @Environment(\.dismiss) private var dismiss
+#if BOOKCON_ENABLE_READIUM
     @StateObject private var bridge: ReaderBridge
     @State private var engine: ReadiumEPUBEngine?
-    @State private var displayedPct: Double
     @State private var failureText: String?
+#endif
+    @State private var displayedPct: Double
 
     init(book: Book) {
         self.book = book
+#if BOOKCON_ENABLE_READIUM
         _bridge = StateObject(wrappedValue: ReaderBridge(bookId: book.id))
+#endif
         _displayedPct = State(initialValue: book.progressPct)
     }
 
@@ -46,9 +50,11 @@ struct EPUBReaderView: View {
         .background(Color(uiColor: .systemBackground))
         .navigationBarHidden(true)
         .task { await bootstrap() }
+#if BOOKCON_ENABLE_READIUM
         .onChange(of: bridge.pct) { _, newValue in
             displayedPct = newValue
         }
+#endif
     }
 
     // MARK: Slim top bar
@@ -68,6 +74,7 @@ struct EPUBReaderView: View {
 
             Spacer(minLength: 8)
 
+#if BOOKCON_ENABLE_READIUM
             if EPUBRoute.useReadium {
                 Button {
                     _ = engine?.addHighlightFromSelection()
@@ -77,6 +84,7 @@ struct EPUBReaderView: View {
                 .disabled(engine == nil)
                 .accessibilityLabel("Highlight selection")
             }
+#endif
 
             Text("\(Int(displayedPct.rounded()))%")
                 .font(.caption.monospacedDigit())
@@ -91,6 +99,7 @@ struct EPUBReaderView: View {
 
     @ViewBuilder
     private var content: some View {
+        #if BOOKCON_ENABLE_READIUM
         if EPUBRoute.useReadium {
             if let engine {
                 EngineSurface(engineViewController: engine.viewController())
@@ -115,6 +124,9 @@ struct EPUBReaderView: View {
         } else {
             EPUBFallbackReader(book: book)
         }
+        #else
+        EPUBFallbackReader(book: book)
+        #endif
     }
 
     // MARK: Bootstrap
@@ -122,6 +134,7 @@ struct EPUBReaderView: View {
     /// onAppear construction hook — `ReadiumEPUBEngine.openAsync` is async, so the
     /// engine is built here instead of in `init`.
     private func bootstrap() async {
+        #if BOOKCON_ENABLE_READIUM
         bridge.onDismiss = { dismiss() }
         guard EPUBRoute.useReadium else { return } // fallback builds itself
         guard engine == nil else { return }
@@ -145,6 +158,7 @@ struct EPUBReaderView: View {
         } catch {
             failureText = error.localizedDescription
         }
+        #endif
     }
 
     private static func highlightsKey(_ bookId: String) -> String {
@@ -171,6 +185,7 @@ private struct EngineSurface: UIViewControllerRepresentable {
 ///   * live progress feeds the header percentage immediately,
 ///   * LibraryStore writes are throttled to at most one per second (>= 1s),
 ///   * `hostDismiss()` pops the screen.
+#if BOOKCON_ENABLE_READIUM
 @MainActor
 final class ReaderBridge: ObservableObject, EPUBEngineHost {
 
@@ -195,3 +210,4 @@ final class ReaderBridge: ObservableObject, EPUBEngineHost {
         onDismiss?()
     }
 }
+#endif
