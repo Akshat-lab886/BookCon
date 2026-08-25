@@ -1,0 +1,62 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Resolve dependencies
+        working-directory: ios
+        run: |
+          xcrun simctl list runtimes | head -5
+          swift package resolve 2>&1 | tail -20 || true
+          xcodebuild -resolvePackageDependencies \
+            -project BookCon.xcodeproj -scheme BookCon 2>&1 | tail -30
+
+      - name: Build (iOS Simulator)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          DEST=$(xcrun simctl list devices available | grep -m1 "iPhone" | sed -E 's/.*\(([A-F0-9-]{36})\).*/\1/')
+          echo "Destination UDID: $DEST"
+          xcodebuild -project BookCon.xcodeproj -scheme BookCon \
+            -destination "id=$DEST" -derivedDataPath .dd build CODE_SIGNING_ALLOWED=NO 2>&1 | tail -80
+
+      - name: Boot simulator + install + launch + screenshot
+        continue-on-error: true
+        working-directory: ios
+        run: |
+          DEST=$(xcrun simctl list devices available | grep -m1 "iPhone" | sed -E 's/.*\(([A-F0-9-]{36})\).*/\1/')
+          xcrun simctl boot "$DEST" || true
+          xcrun simctl bootstatus "$DEST" -b
+          APP=$(find .dd/Build/Products -type d -name "BookCon.app" | head -1)
+          xcrun simctl install "$DEST" "$APP"
+          xcrun simctl launch "$DEST" com.bookcon.ios || true
+          sleep 8
+          mkdir -p shots
+          xcrun simctl io "$DEST" screenshot shots/simulator.png || true
+          ls -la shots || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BookCon-iOS-Simulator
+          path: |
+            ios/.dd/Build/Products/**/*.app
+            ios/shots/*.png
+          if-no-files-found: warn
+          retention-days: 30
