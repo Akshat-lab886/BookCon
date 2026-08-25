@@ -3,9 +3,9 @@
 //  BookCon
 //
 //  READIUM ISOLATION BOUNDARY (referred to in design docs as "ReadiumEngine").
-//  This is the ONE AND ONLY file in the app allowed to `import ReadiumShared` /
-//  `import ReadiumNavigator
-import ReadiumAdapterGCDWebServer`. Everything the rest of the app touches is plain
+//  This is the ONE AND ONLY file in the app allowed to `import ReadiumShared`,
+//  `import ReadiumNavigator` and `import ReadiumAdapterGCDWebServer`.
+//  Everything the rest of the app touches is plain
 //  Foundation/UIKit types: `EPUBEngineHost`, `[String]` highlight JSON, and an
 //  opaque `Any` publication box. If Readium 3.2.0 API shapes drift, only this
 //  file should need fixing — risky spots carry `// VERIFY-CI:` comments.
