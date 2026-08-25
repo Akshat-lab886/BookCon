@@ -266,7 +266,7 @@ struct PencilKitCanvas: UIViewRepresentable {
         /// origin the page currently occupies.
         private func project(_ drawing: PKDrawing, onto canvas: PKCanvasView, viewportOrigin: CGPoint) {
             suppressDrawingCallbacks = true
-            canvas.drawing = drawing.transformed(by: InkGeometry.pageToCanvasTranslation(origin: viewportOrigin))
+            canvas.drawing = drawing.transformed(using: InkGeometry.pageToCanvasTranslation(origin: viewportOrigin))
             suppressDrawingCallbacks = false
             lastAppliedOrigin = viewportOrigin
         }
@@ -283,7 +283,7 @@ struct PencilKitCanvas: UIViewRepresentable {
             if let pdfView = controller.pdfView,
                let page = currentPage(in: pdfView) {
                 let origin = InkGeometry.pageFrame(of: page, in: pdfView).origin
-                newBase = canvasView.drawing.transformed(by: InkGeometry.canvasToPageTranslation(origin: origin))
+                newBase = canvasView.drawing.transformed(using: InkGeometry.canvasToPageTranslation(origin: origin))
                 lastAppliedOrigin = origin
             }
 

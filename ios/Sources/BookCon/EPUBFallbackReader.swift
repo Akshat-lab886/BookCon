@@ -322,7 +322,7 @@ enum EPUBStructure {
                 range: NSRange(location: found.location, length: source.length - found.location)
             )
             guard closeRange.location != NSNotFound else { break }
-            results.append(source.substring(with: found.location..<NSMaxRange(closeRange)))
+            results.append(source.substring(with: NSRange(location: found.location, length: NSMaxRange(closeRange) - found.location)))
             searchStart = NSMaxRange(closeRange) + 1
         }
         return results

@@ -543,7 +543,7 @@ struct LibraryScreen: View {
 
     private func deletePendingBook() {
         guard let book = bookPendingDeletion else { return }
-        store.deleteBooks([book.id])
+        store.deleteBooks(ids: [book.id])
         bookPendingDeletion = nil
     }
 
