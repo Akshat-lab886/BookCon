@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bookcon.app.core.AiKeyStore
+import com.bookcon.app.core.ReadAloudController
 import com.bookcon.app.core.AppSettings
 import com.bookcon.app.core.SettingsRepository
 import com.bookcon.app.core.Summarizer
@@ -143,6 +144,185 @@ class ReaderViewModel @Inject constructor(
     private val summarizer = Summarizer()
 
     private var summaryJob: Job? = null
+
+    // ---- Wave 2: AI selection actions + read-aloud + pdf jump requests (PRD SEL-AI/TTS/THUMB)
+    private val readAloud by lazy {
+        ReadAloudController(appContext) { viewModelScope.launch { advanceAndSpeakNext() } }
+    }
+
+    data class TtsState(val active: Boolean = false, val speaking: Boolean = false, val error: String? = null)
+
+    private val _ttsState = MutableStateFlow(TtsState())
+    val ttsState: StateFlow<TtsState> = _ttsState
+
+    /** Set by the VM when TTS/auto-jump wants the PDF pager to scroll; consumed by PdfPager. */
+    private val _pdfTurnRequest = MutableStateFlow<Int?>(null)
+    val pdfTurnRequest: StateFlow<Int?> = _pdfTurnRequest
+
+    fun consumePdfTurnRequest() {
+        _pdfTurnRequest.value = null
+    }
+
+    data class SelectionAiState(
+        val selectedText: String? = null,
+        val loading: Boolean = false,
+        val action: String? = null,
+        val result: String? = null,
+        val error: String? = null,
+    )
+
+    private val _selectionAi = MutableStateFlow(SelectionAiState())
+    val selectionAi: StateFlow<SelectionAiState> = _selectionAi
+
+    private var selectionPollJob: kotlinx.coroutines.Job? = null
+
+    /** Starts polling the reader surface for a text selection (EPUB only in practice). */
+    fun startSelectionPolling() {
+        if (selectionPollJob != null) return
+        selectionPollJob = viewModelScope.launch {
+            while (true) {
+                delay(900)
+                val engine = _state.value.engine ?: continue
+                if (!engine.hasSelectionBridge) continue
+                val text = withContext(Dispatchers.IO) { suspendSelectionFetch(engine) }
+                if (text != _selectionAi.value.selectedText && _selectionAi.value.action == null) {
+                    _selectionAi.update { it.copy(selectedText = text) }
+                }
+            }
+        }
+    }
+
+    fun stopSelectionPolling() {
+        selectionPollJob?.cancel()
+        selectionPollJob = null
+        _selectionAi.value = SelectionAiState()
+    }
+
+    private fun suspendSelectionFetch(engine: ReaderEngine): String? =
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withTimeoutOrNull(1200) {
+                kotlinx.coroutines.suspendCancellableCoroutine<String?> { cont ->
+                    engine.currentSelectionText { res -> cont.resume(res) {} }
+                }
+            }
+        }
+
+    /** Runs one of explain / translate / summarize over the current selection. */
+    fun runSelectionAi(action: String) {
+        val sel = _selectionAi.value.selectedText?.trim().orEmpty()
+        if (sel.length < 2 || _selectionAi.value.loading) return
+        _selectionAi.update { it.copy(loading = true, action = action, error = null) }
+        viewModelScope.launch {
+            val settingsNow = settingsRepository.settings.value
+            val apiKey = withContext(Dispatchers.IO) { aiKeyStore.get() }
+            if (apiKey.isBlank()) {
+                _selectionAi.update { it.copy(loading = false, error = "Add your API key in Settings → AI summary.") }
+                return@launch
+            }
+            val prompt = when (action) {
+                "explain" -> "Explain this passage from \"${_state.value.book?.title.orEmpty()}\" in simple language. Keep it under 120 words.\n\n$sel"
+                "translate" -> "Translate this passage into English. Output only the translation.\n\n$sel"
+                else -> "Summarize this passage in 2-3 sentences.\n\n$sel"
+            }
+            val result = withContext(Dispatchers.IO) {
+                Summarizer().summarize(
+                    provider = settingsNow.aiProvider,
+                    baseUrl = settingsNow.aiBaseUrl,
+                    apiKey = apiKey,
+                    model = settingsNow.aiModel.ifBlank { Summarizer.defaultModel(settingsNow.aiProvider) },
+                    bookTitle = _state.value.book?.title.orEmpty(),
+                    pageLabel = action,
+                    pageText = prompt,
+                )
+            }
+            result.fold(
+                onSuccess = { text -> _selectionAi.update { it.copy(loading = false, result = text) } },
+                onFailure = { t ->
+                    _selectionAi.update { it.copy(loading = false, error = t.message ?: "AI request failed") }
+                },
+            )
+        }
+    }
+
+    fun dismissSelectionAi() {
+        _selectionAi.update { SelectionAiState(selectedText = it.selectedText) }
+    }
+
+    // ---- read-aloud ----
+    fun toggleReadAloud() {
+        if (_ttsState.value.active) {
+            stopReadAloud()
+        } else {
+            startReadAloud()
+        }
+    }
+
+    private fun startReadAloud() {
+        val engine = _state.value.engine
+        readAloud.ratePercent = settingsRepository.settings.value.ttsRate
+        speakCurrentPage()
+        if (_ttsState.value.error == null) {
+            _ttsState.value = TtsState(active = true, speaking = true)
+        }
+        // Engine kept for auto-turn below.
+        engine?.let { /* next handled in advanceAndSpeakNext */ }
+    }
+
+    private fun speakCurrentPage() {
+        viewModelScope.launch {
+            val info = withContext(Dispatchers.IO) { currentPageTextInfo() }
+            val text = info?.second
+            if (text.isNullOrBlank()) {
+                _ttsState.value = TtsState(active = true, speaking = false, error = "No readable text on this page.")
+                return@launch
+            }
+            withContext(Dispatchers.IO) { readAloud.speak(text.take(6000)) }
+            _ttsState.value = TtsState(active = true, speaking = true)
+        }
+    }
+
+    private suspend fun advanceAndSpeakNext() {
+        val engine = _state.value.engine
+        if (!_ttsState.value.active) return
+        val pdfBook = _state.value.pdfBook
+        when {
+            pdfBook != null -> {
+                val next = pdfCurrentPage + 1
+                if (next < pdfBook.pageCount) {
+                    _pdfTurnRequest.value = next
+                    onPdfPageChanged(next)
+                    delay(700) // let the pager render
+                    speakCurrentPage()
+                } else {
+                    stopReadAloud()
+                }
+            }
+            engine != null -> {
+                val moved = engine.next()
+                if (moved) {
+                    delay(900)
+                    speakCurrentPage()
+                } else {
+                    stopReadAloud()
+                }
+            }
+            else -> stopReadAloud()
+        }
+    }
+
+    fun pauseReadAloud() {
+        readAloud.pause()
+        _ttsState.value = _ttsState.value.copy(speaking = false)
+    }
+
+    fun resumeReadAloud() {
+        speakCurrentPage()
+    }
+
+    fun stopReadAloud() {
+        readAloud.shutdown()
+        _ttsState.value = TtsState(active = false)
+    }
 
     private val _summaryState = MutableStateFlow(SummaryUiState())
     val summaryState: StateFlow<SummaryUiState> = _summaryState.asStateFlow()

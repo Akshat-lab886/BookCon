@@ -136,6 +136,15 @@ interface ReaderEngine {
     /** Optional real-touch swipe injector (EPUB). Null for non-web engines. */
     var nativeSwipeTurn: ((forward: Boolean) -> Boolean)?
 
+    /**
+     * Fetches the currently selected text (if any) from the reader surface.
+     * Callback-based because the EPUB path crosses the WebView bridge.
+     */
+    fun currentSelectionText(onResult: (String?) -> Unit) {}
+
+    /** True when this engine can report selections via [currentSelectionText]. */
+    val hasSelectionBridge: Boolean get() = false
+
     /** Releases the navigator fragment and any engine resources. Idempotent; main thread. */
     fun close()
 
@@ -427,6 +436,20 @@ class EpubReaderEngine internal constructor(
      * Plain text of the visible EPUB screen, extracted from the current reading-order
      * resource. Serves in-reader AI page summaries; null when nothing readable is open.
      */
+    private val selectionJs: String =
+        "(function(){try{var s=window.getSelection&&window.getSelection();" +
+            "var t=s?s.toString():'';t=t.trim();return t.length>0?t.substring(0,4000):'';}catch(e){return '';}})()"
+
+    override val hasSelectionBridge: Boolean get() = webViewEvaluator != null
+
+    override fun currentSelectionText(onResult: (String?) -> Unit) {
+        val evaluator = webViewEvaluator ?: return onResult(null)
+        evaluator(selectionJs) { res ->
+            val text = res?.trim()
+            onResult(if (text.isNullOrBlank()) null else text)
+        }
+    }
+
     override fun currentPageText(): Pair<String, String>? {
         val locator = currentLocator.value
         val hrefKey = locator.href.toString().substringBefore('#')

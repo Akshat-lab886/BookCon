@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -269,8 +270,18 @@ private fun ReaderContentHost(
             },
     ) {
         val pdf = state.pdfBook
+        var pdfThumbs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
         // Reading-time tracking: one minute per minute of active reader session.
         ReadingMinuteTicker(bookId = state.book?.id)
+
+        androidx.compose.runtime.LaunchedEffect(state.engine, state.phase) {
+            if (state.engine?.hasSelectionBridge == true && state.phase == ReaderPhase.READY) {
+                viewModel.startSelectionPolling()
+            }
+        }
+        androidx.compose.runtime.DisposableEffect(Unit) {
+            onDispose { viewModel.stopSelectionPolling() }
+        }
 
         when {
             // PDFs render through our own PdfRenderer pager (no Readium navigator).
@@ -297,6 +308,12 @@ private fun ReaderContentHost(
                 nightMode = settings.pdfNightMode,
                 warmth = settings.pdfWarmth,
                 onToggleNightMode = { viewModel.togglePdfNightMode() },
+                onToggleReadAloud = { viewModel.toggleReadAloud() },
+                showThumbs = pdfThumbs,
+                onToggleThumbs = { pdfThumbs = !pdfThumbs },
+                onJumpTo = { },
+                turnRequest = viewModel.pdfTurnRequest.collectAsStateWithLifecycle().value,
+                onTurnRequestConsumed = { viewModel.consumePdfTurnRequest() },
                 modifier = Modifier.fillMaxSize(),
             )
 
@@ -479,6 +496,7 @@ private fun ReaderContentHost(
                 title = state.chapterTitle.ifBlank { state.book?.title.orEmpty() },
                 remainingPercent = state.remainingPercent,
                 onSummarize = { viewModel.summarizeCurrentPage() },
+                onToggleReadAloud = { viewModel.toggleReadAloud() },
                 onClose = onClose,
             )
         }
@@ -528,6 +546,20 @@ private fun ReaderContentHost(
                 onDismiss = viewModel::dismissSummary,
             )
         }
+
+        // Selection AI actions (EPUB selection) — sits above bottom chrome.
+        if (state.phase == ReaderPhase.READY && state.panel == ReaderPanel.NONE) {
+            SelectionAiBar(
+                viewModel = viewModel,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
+            )
+        }
+
+        // Read-aloud pill.
+        ReadAloudBar(
+            viewModel = viewModel,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 170.dp),
+        )
     } // Box
 }
 
@@ -722,6 +754,7 @@ private fun ReaderTopBar(
     title: String,
     remainingPercent: Float?,
     onSummarize: () -> Unit,
+    onToggleReadAloud: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -753,6 +786,9 @@ private fun ReaderTopBar(
         }
         IconButton(onClick = onSummarize) {
             Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
+        }
+        IconButton(onClick = onToggleReadAloud) {
+            Icon(Icons.Outlined.Headphones, contentDescription = "Read aloud")
         }
         BatteryStub(modifier = Modifier.padding(end = 8.dp))
     }

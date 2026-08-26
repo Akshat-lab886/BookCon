@@ -18,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Collections
+import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -77,6 +79,12 @@ fun PdfPager(
     nightMode: Boolean = false,
     warmth: Int = 0,
     onToggleNightMode: () -> Unit = {},
+    onToggleReadAloud: () -> Unit = {},
+    turnRequest: Int? = null,
+    onTurnRequestConsumed: () -> Unit = {},
+    showThumbs: Boolean = false,
+    onToggleThumbs: () -> Unit = {},
+    onJumpTo: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -126,6 +134,14 @@ fun PdfPager(
             }
     }
     LaunchedEffect(pagerState) { ensureRendered(pagerState.currentPage) }
+
+    LaunchedEffect(turnRequest) {
+        val target = turnRequest ?: return@LaunchedEffect
+        if (target in 0 until pdf.pageCount) {
+            pagerState.animateScrollToPage(target)
+        }
+        onTurnRequestConsumed()
+    }
 
     fun turnTo(page: Int) {
         val clamped = page.coerceIn(0, pdf.pageCount - 1)
@@ -214,6 +230,16 @@ fun PdfPager(
                 )
                 IconButton(onClick = onSummarize) {
                     Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
+                }
+                IconButton(onClick = onToggleReadAloud) {
+                    Icon(Icons.Outlined.Headphones, contentDescription = "Read aloud")
+                }
+                IconButton(onClick = onToggleThumbs) {
+                    Icon(
+                        Icons.Outlined.Collections,
+                        contentDescription = "Page thumbnails",
+                        tint = if (showThumbs) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    )
                 }
                 IconButton(onClick = onToggleNightMode) {
                     Icon(
