@@ -17,10 +17,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -72,6 +74,9 @@ fun PdfPager(
     onInkToolChange: (PdfInkTool) -> Unit,
     onInkColorChange: (String) -> Unit,
     onSummarize: () -> Unit,
+    nightMode: Boolean = false,
+    warmth: Int = 0,
+    onToggleNightMode: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -141,6 +146,7 @@ fun PdfPager(
                         bitmap = bmp.asImageBitmap(),
                         contentDescription = "Page ${index + 1}",
                         contentScale = ContentScale.Fit,
+                        colorFilter = nightPageFilter(nightMode),
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -208,6 +214,13 @@ fun PdfPager(
                 )
                 IconButton(onClick = onSummarize) {
                     Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
+                }
+                IconButton(onClick = onToggleNightMode) {
+                    Icon(
+                        Icons.Outlined.DarkMode,
+                        contentDescription = if (nightMode) "Night mode on" else "Night mode off",
+                        tint = if (nightMode) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                    )
                 }
             }
         }

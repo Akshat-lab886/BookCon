@@ -18,6 +18,9 @@ object Routes {
     const val DEVICES = "settings/devices"
     const val STORAGE = "settings/storage"
     const val AI_SETTINGS = "settings/ai"
+    const val VOCAB = "vocab"
+    const val STATS = "stats"
+    const val WIFI_IMPORT = "import/wifi"
 
     fun details(bookId: String) = "details/$bookId"
     fun reader(bookId: String) = "reader/$bookId"
@@ -76,6 +79,9 @@ fun BookConApp(
                     openDevices = { navController.navigate(Routes.DEVICES) },
                     openStorage = { navController.navigate(Routes.STORAGE) },
                     openAiSummary = { navController.navigate(Routes.AI_SETTINGS) },
+                    openVocab = { navController.navigate(Routes.VOCAB) },
+                    openStats = { navController.navigate(Routes.STATS) },
+                    openWifiImport = { navController.navigate(Routes.WIFI_IMPORT) },
                     onSignedOut = {
                         navController.navigate(Routes.AUTH) {
                             popUpTo(Routes.LIBRARY) { inclusive = true }
@@ -91,6 +97,15 @@ fun BookConApp(
             }
             composable(Routes.AI_SETTINGS) {
                 com.bookcon.app.ui.settings.AiSettingsScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.VOCAB) {
+                com.bookcon.app.ui.vocab.VocabScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.STATS) {
+                com.bookcon.app.ui.stats.StatsScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.WIFI_IMPORT) {
+                com.bookcon.app.ui.importwifi.WifiImportScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.ANNOTATIONS) {
                 com.bookcon.app.ui.annotations.AnnotationsScreen(

@@ -22,6 +22,10 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Spellcheck
+import androidx.compose.material.icons.outlined.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -66,6 +70,9 @@ fun SettingsScreen(
     openDevices: () -> Unit,
     openStorage: () -> Unit,
     openAiSummary: () -> Unit,
+    openVocab: () -> Unit,
+    openStats: () -> Unit,
+    openWifiImport: () -> Unit,
     onSignedOut: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -179,6 +186,27 @@ fun SettingsScreen(
                     supportingContent = { Text("Bring your own key — summarize pages") },
                     leadingContent = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
                     modifier = Modifier.clickable(onClick = openAiSummary),
+                )
+            }
+
+            SectionCard("Reading", icon = Icons.Outlined.MenuBook) {
+                ListItem(
+                    headlineContent = { Text("Vocabulary") },
+                    supportingContent = { Text("Saved words with spaced-repetition review") },
+                    leadingContent = { Icon(Icons.Outlined.Spellcheck, contentDescription = null) },
+                    modifier = Modifier.clickable(onClick = openVocab),
+                )
+                ListItem(
+                    headlineContent = { Text("Reading stats") },
+                    supportingContent = { Text("Daily minutes, streaks and goals") },
+                    leadingContent = { Icon(Icons.Outlined.BarChart, contentDescription = null) },
+                    modifier = Modifier.clickable(onClick = openStats),
+                )
+                ListItem(
+                    headlineContent = { Text("Import over Wi-Fi") },
+                    supportingContent = { Text("Send books from a browser on the same network") },
+                    leadingContent = { Icon(Icons.Outlined.Wifi, contentDescription = null) },
+                    modifier = Modifier.clickable(onClick = openWifiImport),
                 )
             }
 

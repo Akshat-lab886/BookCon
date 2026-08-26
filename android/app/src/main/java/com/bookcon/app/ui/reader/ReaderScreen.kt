@@ -269,6 +269,9 @@ private fun ReaderContentHost(
             },
     ) {
         val pdf = state.pdfBook
+        // Reading-time tracking: one minute per minute of active reader session.
+        ReadingMinuteTicker(bookId = state.book?.id)
+
         when {
             // PDFs render through our own PdfRenderer pager (no Readium navigator).
             pdf != null -> PdfPager(
@@ -291,6 +294,9 @@ private fun ReaderContentHost(
                 onInkToolChange = viewModel::setPdfInkTool,
                 onInkColorChange = viewModel::setPdfInkColor,
                 onSummarize = { viewModel.summarizeCurrentPage() },
+                nightMode = settings.pdfNightMode,
+                warmth = settings.pdfWarmth,
+                onToggleNightMode = { viewModel.togglePdfNightMode() },
                 modifier = Modifier.fillMaxSize(),
             )
 
@@ -1072,6 +1078,23 @@ private fun ApplyOrientationLock(activity: Activity?, lock: String) {
         onDispose {
             if (activity != null && previous != null) {
                 activity.requestedOrientation = previous
+            }
+        }
+    }
+}
+
+
+/** Logs one reading minute per 60s while the reader is in the foreground (PRD STAT-*). */
+@Composable
+private fun ReadingMinuteTicker(bookId: String?) {
+    if (bookId == null) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.runtime.LaunchedEffect(bookId) {
+        val tracker = com.bookcon.app.core.ReadingTracker(context)
+        while (true) {
+            kotlinx.coroutines.delay(60_000)
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                tracker.logMinute(bookId)
             }
         }
     }

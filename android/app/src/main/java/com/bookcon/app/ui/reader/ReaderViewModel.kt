@@ -665,6 +665,18 @@ class ReaderViewModel @Inject constructor(
 
     fun toggleChrome() = _state.update { it.copy(chromeVisible = !it.chromeVisible) }
 
+    /** PDF night mode toggle (PRD PDF-NIGHT): persists through SettingsRepository. */
+    fun togglePdfNightMode() {
+        viewModelScope.launch {
+            val next = !settingsRepository.settings.value.pdfNightMode
+            settingsRepository.setPdfNightMode(next)
+        }
+    }
+
+    fun setPdfWarmth(v: Int) {
+        viewModelScope.launch { settingsRepository.setPdfWarmth(v) }
+    }
+
     fun setChromeVisible(visible: Boolean) = _state.update { it.copy(chromeVisible = visible) }
 
     fun setPanel(panel: ReaderPanel) = _state.update { it.copy(panel = panel) }
