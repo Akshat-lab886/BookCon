@@ -72,7 +72,9 @@ fun AiSettingsScreen(
     var keyStatus by remember { mutableStateOf<String?>(null) }
 
     val testing = test == AiTestState.Running
-    val online = Net.isOnline(context)
+    // Loopback base URLs (USB-tunneled test servers) are reachable with no transport up.
+    val online = settings.aiBaseUrl.contains("127.0.0.1") ||
+        settings.aiBaseUrl.contains("localhost") || Net.isOnline(context)
     val suggestedModel = Summarizer.defaultModel(settings.aiProvider)
 
     Scaffold(

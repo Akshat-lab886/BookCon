@@ -767,7 +767,11 @@ class ReaderViewModel @Inject constructor(
         _summaryState.value = SummaryUiState(loading = true)
 
         summaryJob = viewModelScope.launch {
-            if (!com.bookcon.app.core.Net.isOnline(appContext)) {
+            val settingsNow = settingsRepository.settings.value
+            // Loopback providers (USB-tunneled test servers) work with no transport up.
+            val loopback = settingsNow.aiBaseUrl.contains("127.0.0.1") ||
+                settingsNow.aiBaseUrl.contains("localhost")
+            if (!loopback && !com.bookcon.app.core.Net.isOnline(appContext)) {
                 _summaryState.value = SummaryUiState(
                     error = "AI summaries need internet. Connect and try again.",
                 )
@@ -781,8 +785,7 @@ class ReaderViewModel @Inject constructor(
                 )
                 return@launch
             }
-
-            val settings = settingsRepository.settings.value
+            val settings = settingsNow
 
             // Cache key, cache lookup, and text extraction happen together on IO so a
             // page turn mid-flight can never pair new text with an old page's key.
