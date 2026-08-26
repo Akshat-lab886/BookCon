@@ -251,6 +251,24 @@ fun PdfPager(
             }
         }
 
+        // PRD THUMB: filmstrip scrubber (tap thumbnail to jump).
+        if (showThumbs) {
+            PdfThumbStrip(
+                pdf = pdf,
+                currentPage = pagerState.currentPage,
+                onPick = { target ->
+                    scope.launch { pagerState.animateScrollToPage(target) }
+                    onJumpTo(target)
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 96.dp),
+            )
+        }
+
+        // PRD PDF-NIGHT: warm veil above inverted pages.
+        PdfWarmVeil(enabled = nightMode, warmth = warmth)
+
         // INK-2: floating pen button toggles the annotation toolbar.
         FloatingActionButton(
             onClick = {

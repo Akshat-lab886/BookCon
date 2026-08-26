@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun SelectionAiBar(
     viewModel: ReaderViewModel,
+    onDefine: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.selectionAi.collectAsStateWithLifecycle()
@@ -73,6 +74,12 @@ fun SelectionAiBar(
                     onClick = { viewModel.runSelectionAi("summarize") },
                     label = { Text("Summarize") },
                 )
+                if (onDefine != null && sel.split(Regex("\\s+")).size <= 4) {
+                    AssistChip(
+                        onClick = { onDefine(sel) },
+                        label = { Text("Define") },
+                    )
+                }
             }
 
             when {

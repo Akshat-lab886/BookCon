@@ -46,12 +46,14 @@ fun WordLookupHost(
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var definition by remember(word) { mutableStateOf<String?>(null) }
+    var lookedUp by remember(word) { mutableStateOf(false) }
     var saved by remember(word) { mutableStateOf(false) }
     val dictionary = remember { Dictionary(context) }
     val vocab = remember { VocabStore(context) }
 
     LaunchedEffect(word) {
         definition = dictionary.lookup(word)?.meaning
+        lookedUp = true
     }
 
     AlertDialog(
@@ -80,8 +82,14 @@ fun WordLookupHost(
         text = {
             Column {
                 when {
-                    definition == null -> {
+                    definition == null && !lookedUp -> {
                         CircularProgressIndicator(modifier = Modifier.padding(8.dp))
+                    }
+                    definition == null -> {
+                        Text(
+                            "No definition found in the offline dictionary.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                     else -> Text(definition!!, style = MaterialTheme.typography.bodyMedium)
                 }

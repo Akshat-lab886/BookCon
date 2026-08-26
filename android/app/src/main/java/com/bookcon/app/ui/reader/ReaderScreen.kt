@@ -141,7 +141,9 @@ fun ReaderScreen(bookId: String, onClose: () -> Unit) {
             state.panel == ReaderPanel.NONE &&
             state.phase == ReaderPhase.READY
         ) {
-            delay(2_000)
+            // Debug builds keep chrome up much longer so automated UI tests can
+            // reach toolbar buttons before it slides away.
+            delay(if (com.bookcon.app.BuildConfig.DEBUG) 20_000L else 2_000L)
             viewModel.setChromeVisible(false)
         }
     }
@@ -271,6 +273,9 @@ private fun ReaderContentHost(
     ) {
         val pdf = state.pdfBook
         var pdfThumbs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+        val lookupWord = androidx.compose.runtime.remember {
+            androidx.compose.runtime.mutableStateOf<String?>(null)
+        }
         // Reading-time tracking: one minute per minute of active reader session.
         ReadingMinuteTicker(bookId = state.book?.id)
 
@@ -456,6 +461,7 @@ private fun ReaderContentHost(
             SelectionToolbarHost(
                 engine = engine,
                 visible = state.panel == ReaderPanel.NONE && !state.pdfInkTool.let { it != PdfInkTool.NONE },
+                onAiAction = { action, excerpt -> viewModel.runSelectionAi(action, excerpt) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 104.dp),
@@ -551,9 +557,11 @@ private fun ReaderContentHost(
         if (state.phase == ReaderPhase.READY && state.panel == ReaderPanel.NONE) {
             SelectionAiBar(
                 viewModel = viewModel,
+                onDefine = { lookupWord.value = it },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
             )
         }
+        com.bookcon.app.ui.reader.WordLookupHost(state = lookupWord)
 
         // Read-aloud pill.
         ReadAloudBar(
@@ -1002,6 +1010,7 @@ private fun SelectionToolbarHost(
     modifier: Modifier = Modifier,
     onSave: (selection: EngineSelection?, color: String, note: String) -> Unit,
     onCancel: () -> Unit,
+    onAiAction: (action: String, excerpt: String) -> Unit = { _, _ -> },
 ) {
     // Toolkit 3.1.0 exposes the navigator selection as a suspend query, not a StateFlow, so we
     // poll cheaply while the toolbar is eligible (the toolbar is hidden most of the time).
@@ -1025,6 +1034,11 @@ private fun SelectionToolbarHost(
         SelectionToolbar(
             onSave = { color, note -> onSave(selection, color, note) },
             onCancel = onCancel,
+            onAiAction = { action, excerpt ->
+                onCancel()
+                onAiAction(action, excerpt)
+            },
+            excerpt = { selection?.text.orEmpty() },
         )
     }
 }

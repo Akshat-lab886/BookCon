@@ -210,8 +210,14 @@ class ReaderViewModel @Inject constructor(
     /** Runs one of explain / translate / summarize over the current selection. */
     fun runSelectionAi(action: String) {
         val sel = _selectionAi.value.selectedText?.trim().orEmpty()
+        runSelectionAi(action, sel)
+    }
+
+    /** Explicit-text variant used by the highlight/selection toolbar (iframe-safe). */
+    fun runSelectionAi(action: String, text: String) {
+        val sel = text.trim()
         if (sel.length < 2 || _selectionAi.value.loading) return
-        _selectionAi.update { it.copy(loading = true, action = action, error = null) }
+        _selectionAi.update { it.copy(loading = true, action = action, selectedText = sel.take(80), error = null) }
         viewModelScope.launch {
             val settingsNow = settingsRepository.settings.value
             val apiKey = withContext(Dispatchers.IO) { aiKeyStore.get() }

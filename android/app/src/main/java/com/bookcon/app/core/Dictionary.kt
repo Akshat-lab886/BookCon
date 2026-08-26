@@ -45,14 +45,17 @@ class Dictionary(context: Context) {
         val base = raw.trim().lowercase().filter { it.isLetter() || it == '-' || it == '\'' || it == ' ' }
         if (base.isBlank()) return emptyList()
         val list = mutableListOf(base)
-        // Possessives and simple inflections.
+        // Possessives + common inflections (ordered most-specific first).
         if (base.endsWith("'s")) list += base.removeSuffix("'s")
+        if (base.endsWith("ies")) list += base.removeSuffix("ies") + "y"
         if (base.endsWith("es")) list += base.removeSuffix("es")
         if (base.endsWith("s")) list += base.removeSuffix("s")
-        if (base.endsWith("ed")) list += base.removeSuffix("ed")
-        if (base.endsWith("ing")) list += base.removeSuffix("ing")
+        if (base.endsWith("ied")) list += base.removeSuffix("ied") + "y"
+        if (base.endsWith("ed")) list += base.removeSuffix("ed") + if (base.endsWith("ied")) "" else ""
+        if (base.endsWith("ing")) list += base.removeSuffix("ing").let { it + if (it.length > 2 && it.last()==it[it.length-2]) it.last().toString() else "" }
         if (base.endsWith("ly")) list += base.removeSuffix("ly")
-        return list.distinct()
+        if (base.endsWith("ities")) list += base.removeSuffix("ities") + "ity"
+        return list.map { it.trimEnd() }.filter { it.length > 1 }.distinct()
     }
 
     private suspend fun ensureIndex(): Map<String, Int>? = withContext(Dispatchers.IO) {

@@ -724,6 +724,8 @@ fun annotationColor(name: String): Color =
 internal fun SelectionToolbar(
     onSave: (color: String, note: String) -> Unit,
     onCancel: () -> Unit,
+    onAiAction: ((action: String, excerpt: String) -> Unit)? = null,
+    excerpt: () -> String = { "" },
 ) {
     var selectedColor by remember { mutableStateOf(HIGHLIGHT_COLORS.first().first) }
     var note by remember { mutableStateOf("") }
@@ -770,6 +772,13 @@ internal fun SelectionToolbar(
                 textStyle = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (onAiAction != null && excerpt().length > 2) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = { onAiAction("explain", excerpt()) }) { Text("✨ Explain") }
+                    TextButton(onClick = { onAiAction("translate", excerpt()) }) { Text("🌐 Translate") }
+                    TextButton(onClick = { onAiAction("summarize", excerpt()) }) { Text("Summarize") }
+                }
+            }
             Button(
                 onClick = { onSave(selectedColor, note.trim()) },
                 modifier = Modifier.align(Alignment.End),
