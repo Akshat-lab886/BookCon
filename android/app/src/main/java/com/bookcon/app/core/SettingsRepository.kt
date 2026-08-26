@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
@@ -67,6 +68,13 @@ data class AppSettings(
     val aiBaseUrl: String = "",
     /** Model id; blank → Summarizer.defaultModel([aiProvider]). */
     val aiModel: String = "",
+
+    val pdfNightMode: Boolean = false,
+    val pdfWarmth: Int = 0,
+    val ttsRate: Int = 100,
+    val ttsVoiceName: String = "",
+    val statsGoalMinutes: Int = 0,
+    val vocabCaptureEnabled: Boolean = true,
 ) {
     val localUsable: Boolean get() = storageMode != "cloud"
 }
@@ -108,6 +116,12 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     private val keyAiProvider = stringPreferencesKey("ai_provider")
     private val keyAiBaseUrl = stringPreferencesKey("ai_base_url")
     private val keyAiModel = stringPreferencesKey("ai_model")
+    private val keyPdfNightMode = booleanPreferencesKey("pdf_night_mode")
+    private val keyPdfWarmth = intPreferencesKey("pdf_warmth")
+    private val keyTtsRate = intPreferencesKey("tts_rate")
+    private val keyTtsVoiceName = stringPreferencesKey("tts_voice_name")
+    private val keyStatsGoalMinutes = intPreferencesKey("stats_goal_minutes")
+    private val keyVocabCaptureEnabled = booleanPreferencesKey("vocab_capture_enabled")
 
     val settings: StateFlow<AppSettings> = context.dataStore.data
         .map(::readSettings)
@@ -151,6 +165,12 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     suspend fun setAiModel(model: String) {
         update { it.copy(aiModel = model.trim()) }
     }
+    suspend fun setPdfNightMode(v: Boolean) { update { it.copy(pdfNightMode = v) } }
+    suspend fun setPdfWarmth(v: Int) { update { it.copy(pdfWarmth = v.coerceIn(0, 100)) } }
+    suspend fun setTtsRate(v: Int) { update { it.copy(ttsRate = v.coerceIn(50, 300)) } }
+    suspend fun setTtsVoiceName(v: String) { update { it.copy(ttsVoiceName = v) } }
+    suspend fun setStatsGoalMinutes(v: Int) { update { it.copy(statsGoalMinutes = v.coerceAtLeast(0)) } }
+    suspend fun setVocabCaptureEnabled(v: Boolean) { update { it.copy(vocabCaptureEnabled = v) } }
 
     private val keyLastSyncedAt = longPreferencesKey("last_synced_at")
 
@@ -191,6 +211,12 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         aiProvider = prefs[keyAiProvider] ?: "openai",
         aiBaseUrl = prefs[keyAiBaseUrl] ?: "",
         aiModel = prefs[keyAiModel] ?: "",
+        pdfNightMode = prefs[keyPdfNightMode] ?: false,
+        pdfWarmth = prefs[keyPdfWarmth] ?: 0,
+        ttsRate = prefs[keyTtsRate] ?: 100,
+        ttsVoiceName = prefs[keyTtsVoiceName] ?: "",
+        statsGoalMinutes = prefs[keyStatsGoalMinutes] ?: 0,
+        vocabCaptureEnabled = prefs[keyVocabCaptureEnabled] ?: true,
         tapZonesJson = prefs[keyTapZones] ?: "",
     )
 
@@ -220,6 +246,12 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
         this[keyAiProvider] = s.aiProvider
         this[keyAiBaseUrl] = s.aiBaseUrl
         this[keyAiModel] = s.aiModel
+        this[keyPdfNightMode] = s.pdfNightMode
+        this[keyPdfWarmth] = s.pdfWarmth
+        this[keyTtsRate] = s.ttsRate
+        this[keyTtsVoiceName] = s.ttsVoiceName
+        this[keyStatsGoalMinutes] = s.statsGoalMinutes
+        this[keyVocabCaptureEnabled] = s.vocabCaptureEnabled
     }
 
     private fun jsonFloat(json: String, field: String): Float? =
