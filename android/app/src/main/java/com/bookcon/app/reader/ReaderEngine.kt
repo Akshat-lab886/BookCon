@@ -437,15 +437,21 @@ class EpubReaderEngine internal constructor(
 
         // The Resource API is suspend-only; summarizeCurrentPage calls this off the main
         // thread (Dispatchers.IO), so bridge with runBlocking here.
+        // Resource is Readium's own Closeable (not java.io), so close it in a
+        // finally on every path (review finding #5).
         val raw = kotlinx.coroutines.runBlocking {
-            runCatching {
-                val length = resource.length().getOrNull() ?: return@runCatching ByteArray(0)
-                if (length <= 0L) {
-                    ByteArray(0)
-                } else {
-                    resource.read(0 until length).getOrNull() ?: ByteArray(0)
-                }
-            }.getOrDefault(ByteArray(0))
+            try {
+                runCatching {
+                    val length = resource.length().getOrNull() ?: return@runCatching ByteArray(0)
+                    if (length <= 0L) {
+                        ByteArray(0)
+                    } else {
+                        resource.read(0 until length).getOrNull() ?: ByteArray(0)
+                    }
+                }.getOrDefault(ByteArray(0))
+            } finally {
+                runCatching { resource.close() }
+            }
         }
         if (raw.isEmpty()) return null
 

@@ -46,9 +46,27 @@ class AiKeyStore(context: Context) {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
             )
         }
-        return secure.getOrElse {
+        val prefs = secure.getOrElse {
             Log.w(TAG, "EncryptedSharedPreferences unavailable, using fallback prefs", it)
             context.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)
+        }
+        migrateFallbackInto(prefs, context)
+        return prefs
+    }
+
+    /**
+     * One-time migration: if the Keystore worked this launch but a key was saved to
+     * the fallback file during a degraded session, promote it into secure storage
+     * (and vice versa never happens — secure always wins once available).
+     */
+    private fun migrateFallbackInto(securePrefs: SharedPreferences, context: Context) {
+        runCatching {
+            val fallback = context.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)
+            val orphan = fallback.getString(KEY, null) ?: return
+            if (securePrefs === fallback) return
+            securePrefs.edit().putString(KEY, orphan).commit()
+            fallback.edit().remove(KEY).commit()
+            Log.w(TAG, "Migrated AI key from fallback prefs into encrypted storage")
         }
     }
 

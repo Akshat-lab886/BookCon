@@ -508,6 +508,9 @@ private fun ReaderContentHost(
             onEditTapZones = onEditTapZones,
         )
 
+            } // else (Readium engine)
+        } // when (pdf / status / engine)
+
         // In-reader AI page summary sheet — overlays both the PDF and EPUB render paths.
         val summary by viewModel.summaryState.collectAsStateWithLifecycle()
         if (summary.loading || summary.text != null || summary.error != null) {
@@ -519,8 +522,6 @@ private fun ReaderContentHost(
                 onDismiss = viewModel::dismissSummary,
             )
         }
-            } // else (Readium engine)
-        } // when (pdf / status / engine)
     } // Box
 }
 

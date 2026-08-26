@@ -586,7 +586,7 @@ class ReaderViewModel @Inject constructor(
                 // anchor we need so ink lands on the same page every time (INK-4).
                 val pos = locator.locations.position
                     ?.toString()
-                    ?: locator.locations.progression?.let { ((it * 1000).toInt()).toString() }
+                    ?: locator.locations.progression?.let { ((it * 100_000).toInt()).toString() }
                     ?: "0"
                 _state.update {
                     it.copy(
@@ -766,14 +766,6 @@ class ReaderViewModel @Inject constructor(
         summaryJob?.cancel()
         _summaryState.value = SummaryUiState(loading = true)
 
-        val pageKey = currentPageSummaryKey()
-        if (!forceRefresh) {
-            summaryCache.get(bookId, pageKey)?.let { cached ->
-                _summaryState.value = SummaryUiState(text = cached, fromCache = true)
-                return
-            }
-        }
-
         summaryJob = viewModelScope.launch {
             if (!com.bookcon.app.core.Net.isOnline(appContext)) {
                 _summaryState.value = SummaryUiState(
@@ -791,7 +783,21 @@ class ReaderViewModel @Inject constructor(
             }
 
             val settings = settingsRepository.settings.value
-            val pageInfo = withContext(Dispatchers.IO) { currentPageTextInfo() }
+
+            // Cache key, cache lookup, and text extraction happen together on IO so a
+            // page turn mid-flight can never pair new text with an old page's key.
+            var pageKey = ""
+            var cachedHit: String? = null
+            val pageInfo: Pair<String, String>? = withContext(Dispatchers.IO) {
+                pageKey = currentPageSummaryKey()
+                if (!forceRefresh) cachedHit = summaryCache.get(bookId, pageKey)
+                if (cachedHit != null) null else currentPageTextInfo()
+            }
+
+            if (cachedHit != null) {
+                _summaryState.value = SummaryUiState(text = cachedHit, fromCache = true)
+                return@launch
+            }
             if (pageInfo == null || pageInfo.second.isBlank()) {
                 _summaryState.value = SummaryUiState(error = "Couldn't read text on this page.")
                 return@launch
@@ -812,9 +818,9 @@ class ReaderViewModel @Inject constructor(
             }
             result.fold(
                 onSuccess = { summary ->
-                    runCatching {
-                        withContext(Dispatchers.IO) { summaryCache.put(bookId, pageKey, summary) }
-                    }
+                    // put() guards its own IO; no runCatching here so cancellation
+                    // of this job still propagates instead of resurrecting the sheet.
+                    withContext(Dispatchers.IO) { summaryCache.put(bookId, pageKey, summary) }
                     _summaryState.value = SummaryUiState(text = summary)
                 },
                 onFailure = { t ->
@@ -834,7 +840,7 @@ class ReaderViewModel @Inject constructor(
             val locator = engine.currentLocator.value
             val href = locator.href.toString().substringBefore('#')
             val pos = locator.locations.position?.toString()
-                ?: locator.locations.progression?.let { ((it * 1000).toInt()).toString() }
+                ?: locator.locations.progression?.let { ((it * 100_000).toInt()).toString() }
                 ?: "0"
             return "epub:$href#$pos"
         }

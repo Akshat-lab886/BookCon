@@ -58,10 +58,12 @@ class SummaryCache(context: Context) {
         val tmp = File(target.parentFile, "${target.name}.tmp")
         try {
             tmp.writeText(json.toString())
-            if (target.exists() && !target.delete()) error("Could not replace summary cache file")
+            // rename(2) atomically replaces an existing target on Linux — never
+            // delete-then-rename (a crash between the two loses every summary).
             if (!tmp.renameTo(target)) error("Could not persist summary cache file")
-        } finally {
-            tmp.delete() // no-op once renamed successfully
+        } catch (t: Throwable) {
+            tmp.delete()
+            throw t
         }
     }
 

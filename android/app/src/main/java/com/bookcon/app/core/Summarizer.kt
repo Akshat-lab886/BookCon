@@ -161,7 +161,8 @@ class Summarizer {
                 .getJSONArray("parts")
             buildString {
                 for (i in 0 until parts.length()) {
-                    append(parts.getJSONObject(i).optString("text"))
+                    val part = parts.getJSONObject(i)
+                    if (!part.isNull("text")) append(part.optString("text"))
                 }
             }.trim()
         }.getOrElse {
