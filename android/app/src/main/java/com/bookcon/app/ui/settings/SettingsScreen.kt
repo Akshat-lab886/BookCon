@@ -213,7 +213,7 @@ fun SettingsScreen(
             SectionCard("About", icon = Icons.Filled.Info) {
                 ListItem(
                     headlineContent = { Text("About BookCon") },
-                    supportingContent = { Text("Version 1.0.0 · Open-source licenses") },
+                    supportingContent = { Text("Version 1.2.0 · Open-source licenses") },
                     leadingContent = { Icon(Icons.Filled.Info, contentDescription = null) },
                     modifier = Modifier.clickable { showLicenses = true },
                 )

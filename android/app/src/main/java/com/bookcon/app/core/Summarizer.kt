@@ -46,6 +46,11 @@ class Summarizer {
                     val request = buildGeminiRequest(key, effectiveModel, "$SYSTEM_PROMPT\n\n$userPrompt")
                     parseGemini(execute(request))
                 }
+                PROVIDER_GROQ -> {
+                    val base = normalizedBaseUrl(provider, baseUrl)
+                    val request = buildOpenAiRequest("$base/chat/completions", key, effectiveModel, userPrompt)
+                    parseOpenAi(execute(request))
+                }
                 PROVIDER_CUSTOM -> {
                     // The one documented throw: surfaces as Result.failure(IllegalArgumentException).
                     val base = normalizedBaseUrl(provider, baseUrl)
@@ -185,10 +190,12 @@ class Summarizer {
     companion object {
         const val PROVIDER_OPENAI = "openai"
         const val PROVIDER_GEMINI = "gemini"
+        const val PROVIDER_GROQ = "groq"
         const val PROVIDER_CUSTOM = "custom"
 
         private const val OPENAI_BASE = "https://api.openai.com/v1"
         private const val GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+        private const val GROQ_BASE = "https://api.groq.com/openai/v1"
 
         private const val SYSTEM_PROMPT = "You are a concise reading assistant. Summarize book pages faithfully."
         private const val NETWORK_ERROR = "Network error: check your internet connection"
@@ -202,6 +209,7 @@ class Summarizer {
         fun defaultModel(provider: String): String = when (provider.lowercase().trim()) {
             PROVIDER_OPENAI -> "gpt-4o-mini"
             PROVIDER_GEMINI -> "gemini-1.5-flash"
+            PROVIDER_GROQ -> "llama-3.3-70b-versatile"
             else -> ""
         }
 
@@ -216,6 +224,7 @@ class Summarizer {
             return when (provider.lowercase().trim()) {
                 PROVIDER_OPENAI -> trimmed.ifBlank { OPENAI_BASE }
                 PROVIDER_GEMINI -> GEMINI_BASE
+                PROVIDER_GROQ -> trimmed.ifBlank { GROQ_BASE }
                 else -> trimmed
             }
         }

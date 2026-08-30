@@ -29,6 +29,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,8 +50,19 @@ import com.bookcon.app.core.Summarizer
 
 private val PROVIDER_OPTIONS = listOf(
     "openai" to "OpenAI",
+    "anthropic" to "Anthropic",
+    "groq" to "Groq",
     "gemini" to "Gemini",
     "custom" to "Custom",
+)
+
+private val GROQ_MODELS = listOf(
+    "llama-3.3-70b-versatile" to "Most capable",
+    "llama-3.1-8b-instant" to "Fastest",
+    "gemma2-9b-it" to "Lightweight",
+    "mixtral-8x7b-32768" to "Large context",
+    "llama-3.2-3b-preview" to "Smallest",
+    "deepseek-r1-distill-llama-70b" to "Reasoning",
 )
 
 /** Muted success green for the inline "connected" confirmation line. */
@@ -112,6 +125,13 @@ fun AiSettingsScreen(
                             )
                         }
                     }
+                    if (settings.aiProvider == "groq") {
+                        Text(
+                            "Base URL: api.groq.com/openai/v1",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     if (settings.aiProvider == "custom") {
                         OutlinedTextField(
                             value = settings.aiBaseUrl,
@@ -130,25 +150,64 @@ fun AiSettingsScreen(
             Card(modifier = Modifier.padding(top = 12.dp)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Model", style = MaterialTheme.typography.titleMedium)
-                    OutlinedTextField(
-                        value = settings.aiModel,
-                        onValueChange = viewModel::setModel,
-                        label = { Text("Model") },
-                        placeholder = {
-                            Text(suggestedModel.ifBlank { "server default" })
-                        },
-                        supportingText = {
-                            Text(
-                                if (suggestedModel.isBlank()) {
-                                    "Leave blank unless your server needs a specific model id."
-                                } else {
-                                    "Leave blank to use $suggestedModel."
-                                },
-                            )
-                        },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    if (settings.aiProvider == "groq") {
+                        var expandedModel by remember { mutableStateOf(false) }
+                        val currentLabel = GROQ_MODELS.find { it.first == settings.aiModel }
+                        OutlinedTextField(
+                            value = currentLabel?.let { "${it.first}  —  ${it.second}" } ?: settings.aiModel,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Groq model") },
+                            trailingIcon = {
+                                IconButton(onClick = { expandedModel = !expandedModel }) {
+                                    Icon(
+                                        if (expandedModel) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = "Select model",
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        DropdownMenu(
+                            expanded = expandedModel,
+                            onDismissRequest = { expandedModel = false },
+                        ) {
+                            GROQ_MODELS.forEach { (id, desc) ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(id, style = MaterialTheme.typography.bodyMedium)
+                                            Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    },
+                                    onClick = {
+                                        viewModel.setModel(id)
+                                        expandedModel = false
+                                    },
+                                )
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = settings.aiModel,
+                            onValueChange = viewModel::setModel,
+                            label = { Text("Model") },
+                            placeholder = {
+                                Text(suggestedModel.ifBlank { "server default" })
+                            },
+                            supportingText = {
+                                Text(
+                                    if (suggestedModel.isBlank()) {
+                                        "Leave blank unless your server needs a specific model id."
+                                    } else {
+                                        "Leave blank to use $suggestedModel."
+                                    },
+                                )
+                            },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
 

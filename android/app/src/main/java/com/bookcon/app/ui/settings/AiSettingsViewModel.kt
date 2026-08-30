@@ -43,7 +43,16 @@ class AiSettingsViewModel @Inject constructor(
 
     fun setProvider(provider: String) {
         _test.value = AiTestState.Idle // a result from the previous provider is stale
-        viewModelScope.launch { settingsRepo.setAiProvider(provider) }
+        viewModelScope.launch {
+            settingsRepo.setAiProvider(provider)
+            // Auto-fill base URL for known providers
+            when (provider) {
+                "groq" -> settingsRepo.setAiBaseUrl("https://api.groq.com/openai/v1")
+                "openai" -> settingsRepo.setAiBaseUrl("")
+                "gemini" -> settingsRepo.setAiBaseUrl("")
+                else -> {} // custom — user sets it
+            }
+        }
     }
 
     fun setBaseUrl(url: String) {
@@ -94,6 +103,8 @@ class AiSettingsViewModel @Inject constructor(
         fun providerLabel(provider: String): String = when (provider) {
             "openai" -> "OpenAI"
             "gemini" -> "Gemini"
+            "groq" -> "Groq"
+            "anthropic" -> "Anthropic"
             else -> "custom server"
         }
     }
