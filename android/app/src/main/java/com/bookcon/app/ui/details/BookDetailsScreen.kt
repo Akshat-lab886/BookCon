@@ -5,7 +5,6 @@
 
 package com.bookcon.app.ui.details
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,17 +16,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoStories
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,7 +48,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,16 +57,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.bookcon.app.core.rememberBookPainter
-import com.bookcon.app.core.resolveCoverUrl
 import com.bookcon.app.data.local.BookEntity
 import com.bookcon.app.data.local.DownloadState
+import com.bookcon.app.ui.components.AppTopBar
+import com.bookcon.app.ui.components.BookCover
+import com.bookcon.app.ui.components.FormatChip
+import com.bookcon.app.ui.components.OutlinePillButton
+import com.bookcon.app.ui.components.PillButton
 
 private sealed interface DetailDlg {
     data object None : DetailDlg
@@ -82,6 +83,9 @@ private sealed interface DetailDlg {
  * Book details (PRD FR-DET): hero cover, full metadata, progress, annotations count;
  * Read / Download-toggle / Edit sheet / Add-to-shelf / Export annotations /
  * double-confirm delete with undo.
+ *
+ * v1.3 redesign: blue AppTopBar with back arrow, large BookCover hero, pill
+ * primary CTA, metadata in card layout.
  */
 @Composable
 fun BookDetailsScreen(
@@ -107,7 +111,7 @@ fun BookDetailsScreen(
                         val result = snackbarHostState.showSnackbar(
                             message = event.text,
                             actionLabel = "Undo",
-                            duration = SnackbarDuration.Short, // ≈4–5 s window per PRD LIB-11
+                            duration = SnackbarDuration.Short,
                         )
                         if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) {
                             viewModel.undoDelete(requireNotNull(event.undoBookId))
@@ -128,22 +132,12 @@ fun BookDetailsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = {
-                    Text(
-                        state.book?.title ?: "Book",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
+            AppTopBar(
+                title = state.book?.title?.take(28) ?: "Book",
+                onBack = onBack,
                 actions = {
                     IconButton(onClick = { dialog = DetailDlg.ConfirmDelete1 }) {
-                        Icon(Icons.Filled.Delete, contentDescription = "Delete book")
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete book", tint = androidx.compose.ui.graphics.Color.White)
                     }
                 },
             )
@@ -189,7 +183,7 @@ fun BookDetailsScreen(
                         shelfIds = book.shelfIds.toSet(),
                     )
                     dialog = DetailDlg.EditSheet
-                    openEdit() // nav no-op; the sheet lives here (per route contract)
+                    openEdit()
                 },
                 onAddToShelf = { dialog = DetailDlg.AddToShelf },
                 onExportAnnotations = viewModel::exportAnnotations,
@@ -205,7 +199,6 @@ fun BookDetailsScreen(
             onCancel = { dialog = DetailDlg.None },
             onPick = { viewModel.addToShelf(it); dialog = DetailDlg.None },
         )
-        // PRD LIB-11 double confirm: the second dialog names what is removed server-side.
         DetailDlg.ConfirmDelete1 -> AlertDialog(
             onDismissRequest = { dialog = DetailDlg.None },
             title = { Text("Delete “${state.book?.title}”?") },
@@ -272,44 +265,51 @@ private fun DetailsContent(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .width(170.dp)
-                .aspectRatio(0.7f)
-                .clip(RoundedCornerShape(14.dp)),
-        ) {
-            Box(Modifier.fillMaxSize()) {
-                Image(
-                    painter = rememberBookPainter(resolveCoverUrl(serverUrl, book.coverUrl)),
-                    contentDescription = book.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-        }
         Spacer(Modifier.height(16.dp))
-        Text(book.title, style = MaterialTheme.typography.headlineSmall)
+        // Hero cover
+        BookCover(
+            coverUrl = book.coverUrl,
+            title = book.title,
+            serverUrl = serverUrl,
+            modifier = Modifier
+                .width(180.dp)
+                .aspectRatio(0.7f),
+            cornerRadius = 14.dp,
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Format chip
+        FormatChip(book.format)
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            book.title,
+            style = MaterialTheme.typography.headlineMedium,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
         if (book.authors.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
             Text(
                 book.authors.joinToString(", "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }
         if (seriesName != null || book.seriesIndex != null) {
+            Spacer(Modifier.height(8.dp))
             Text(
                 buildString {
                     append(seriesName ?: "Series")
                     book.seriesIndex?.let { append(" · #${trimIndex(it)}") }
                 },
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.secondary,
             )
         }
 
         progressPercent?.let { pct ->
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 LinearProgressIndicator(
                     progress = { (pct / 100.0).toFloat().coerceIn(0f, 1f) },
@@ -319,44 +319,59 @@ private fun DetailsContent(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onRead, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Filled.MenuBook, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text(if (book.localFile != null) "Read offline" else "Read")
-            }
-            OutlinedButton(onClick = onDownloadToggle, enabled = book.downloadState != DownloadState.DOWNLOADING) {
-                when (book.downloadState) {
-                    DownloadState.DOWNLOADING -> CircularProgressIndicator(modifier = Modifier.height(18.dp).width(18.dp), strokeWidth = 2.dp)
-                    DownloadState.READY -> Icon(Icons.Filled.Check, contentDescription = null)
-                    else -> Icon(Icons.Filled.Download, contentDescription = null)
-                }
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    when {
-                        book.downloadState == DownloadState.DOWNLOADING -> "Downloading"
-                        book.localFile != null -> "Remove offline"
-                        else -> "Download"
-                    },
-                )
-            }
+        Spacer(Modifier.height(20.dp))
+        // Primary CTA — pill button (orange)
+        PillButton(
+            text = if (book.localFile != null) "Read offline" else "Read",
+            icon = Icons.Filled.AutoStories,
+            onClick = onRead,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        // Secondary actions — outline pills
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinePillButton(
+                text = when {
+                    book.downloadState == DownloadState.DOWNLOADING -> "Downloading…"
+                    book.localFile != null -> "Remove offline"
+                    else -> "Download"
+                },
+                icon = if (book.localFile != null) Icons.Filled.Check else Icons.Filled.Download,
+                onClick = onDownloadToggle,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinePillButton(
+                text = "Edit",
+                icon = Icons.Filled.Edit,
+                onClick = onEdit,
+                modifier = Modifier.weight(1f),
+            )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 10.dp)) {
-            OutlinedButton(onClick = onAddToShelf, modifier = Modifier.weight(1f)) { Text("Add to shelf") }
-            OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Filled.Edit, contentDescription = null)
-                Spacer(Modifier.width(6.dp))
-                Text("Edit")
-            }
-        }
-        OutlinedButton(onClick = onExportAnnotations, modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
-            Icon(Icons.Filled.Share, contentDescription = null)
-            Spacer(Modifier.width(6.dp))
-            Text("Export annotations ($annotationCount)")
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinePillButton(
+                text = "Shelf",
+                onClick = onAddToShelf,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinePillButton(
+                text = "Export ($annotationCount)",
+                icon = Icons.Filled.Share,
+                onClick = onExportAnnotations,
+                modifier = Modifier.weight(1f),
+            )
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Details",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.align(Alignment.Start),
+        )
+        Spacer(Modifier.height(8.dp))
         MetadataRow("Format", book.format.uppercase())
         MetadataRow("Language", book.language)
         MetadataRow("Publisher", book.publisher)
@@ -373,7 +388,11 @@ private fun DetailsContent(
             Spacer(Modifier.height(16.dp))
             HorizontalDivider()
             Spacer(Modifier.height(12.dp))
-            Text("Description", style = MaterialTheme.typography.titleSmall, modifier = Modifier.align(Alignment.Start))
+            Text(
+                "Description",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.align(Alignment.Start),
+            )
             Spacer(Modifier.height(6.dp))
             Text(
                 book.description,
@@ -407,8 +426,6 @@ internal fun humanBytes(bytes: Long): String = when {
 
 private fun formatDate(iso: String?): String? =
     iso?.take(10)?.ifBlank { null }
-
-// --------------------------------------------------------------------------- dialogs & sheet
 
 @Composable
 private fun AddToShelfDialog(

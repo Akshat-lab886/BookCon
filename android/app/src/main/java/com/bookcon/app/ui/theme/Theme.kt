@@ -3,33 +3,10 @@ package com.bookcon.app.ui.theme
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
-
-private val Ink = Color(0xFF10131A)
-private val Ember = Color(0xFFE76F51)
-private val Teal = Color(0xFF2A9D8F)
-
-private val LightColors = lightColorScheme(
-    primary = Teal,
-    secondary = Ember,
-    background = Color(0xFFFAF7F2),
-    surface = Color(0xFFFFFEFB),
-    surfaceVariant = Color(0xFFF0EBE2),
-    onPrimary = Color.White,
-)
-
-private val DarkColors = darkColorScheme(
-    primary = Teal,
-    secondary = Ember,
-    background = Color(0xFF10131A),
-    surface = Color(0xFF171B24),
-    surfaceVariant = Color(0xFF232833),
-)
 
 /** Reader themes per PRD RD-5: Light, Sepia, Dark, Black (+custom later). */
 data class ReaderTheme(val bg: Color, val fg: Color, val isDark: Boolean)
@@ -45,6 +22,10 @@ val ReaderThemes = mapOf(
  * App theme. `themeMode` per PRD appearance setting: auto | light | dark | black | sepia.
  * black/sepia map onto the dark/light color schemes here; the reader surface uses
  * [ReaderThemes] for the full reading-specific palette.
+ *
+ * v1.3 ships new brand tokens (cobalt primary, orange secondary), retuned type,
+ * and a friendlier shape scale. No screen has been migrated yet — see
+ * docs/UI_REDESIGN_PLAN.md.
  */
 @Composable
 fun BookConTheme(
@@ -56,11 +37,16 @@ fun BookConTheme(
     },
     content: @Composable () -> Unit,
 ) {
-    val colors = if (darkTheme) DarkColors else LightColors
+    val colors = if (darkTheme) DarkColorsScheme else LightColorsScheme
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
         androidx.core.view.WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
     }
-    MaterialTheme(colorScheme = colors, content = content)
+    MaterialTheme(
+        colorScheme = colors,
+        typography = BookConTypography,
+        shapes = BookConShapes,
+        content = content,
+    )
 }

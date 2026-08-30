@@ -14,11 +14,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,10 +32,12 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
@@ -49,16 +51,15 @@ import androidx.compose.material.icons.filled.Label
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.ViewList
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -67,14 +68,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -94,6 +93,14 @@ import com.bookcon.app.core.rememberBookPainter
 import com.bookcon.app.core.resolveCoverUrl
 import com.bookcon.app.data.local.BookEntity
 import com.bookcon.app.data.local.DownloadState
+import com.bookcon.app.ui.components.AppTopBar
+import com.bookcon.app.ui.components.BookCard as BookCardNew
+import com.bookcon.app.ui.components.BookCover
+import com.bookcon.app.ui.components.BookListRow
+import com.bookcon.app.ui.components.FormatChip
+import com.bookcon.app.ui.components.PillButton
+import com.bookcon.app.ui.components.SearchField
+import com.bookcon.app.ui.components.SectionHeader
 
 private sealed interface Dlg {
     data object None : Dlg
@@ -108,6 +115,9 @@ private sealed interface Dlg {
  * Library home (PRD FR-LIB): instant search + sort + view modes, continue-reading carousel,
  * AND filters (format/tag/shelf/author), bulk-select actions, SAF import, and the
  * Shelves/Series/Tags tabs implemented as in-screen filter states.
+ *
+ * v1.3 redesign: blue AppTopBar, greeting header, pill search, SectionHeader
+ * for "Continue reading" and "All books", BookListRow for the list view.
  */
 @Composable
 fun LibraryScreen(
@@ -141,37 +151,31 @@ fun LibraryScreen(
     Scaffold(
         topBar = {
             if (!state.selectionActive) {
-                TopAppBar(
-                    title = { Text("Library") },
+                AppTopBar(
+                    title = "My Library",
+                    subtitle = "${state.books.size} book${if (state.books.size == 1) "" else "s"}",
                     actions = {
-                        Box {
-                            IconButton(onClick = { sortMenuOpen = true }) {
-                                Icon(Icons.Filled.Sort, contentDescription = "Sort")
-                            }
-                            DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
-                                SortMode.entries.forEach { mode ->
-                                    DropdownMenuItem(
-                                        text = { Text(mode.label) },
-                                        trailingIcon = {
-                                            if (mode == state.sort) Icon(Icons.Filled.Check, contentDescription = null)
-                                        },
-                                        onClick = {
-                                            viewModel.setSort(mode)
-                                            sortMenuOpen = false
-                                        },
-                                    )
-                                }
-                            }
+                        IconButton(onClick = { sortMenuOpen = true }) {
+                            Icon(
+                                Icons.Filled.Sort,
+                                contentDescription = "Sort",
+                                tint = Color.White,
+                            )
                         }
                         IconButton(onClick = viewModel::toggleViewMode) {
                             Icon(
                                 imageVector = if (state.gridView) Icons.Filled.ViewList else Icons.Filled.GridView,
                                 contentDescription = if (state.gridView) "Switch to list view" else "Switch to grid view",
+                                tint = Color.White,
                             )
                         }
                         Box {
                             IconButton(onClick = { overflowOpen = true }) {
-                                Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                                Icon(
+                                    Icons.Filled.MoreVert,
+                                    contentDescription = "More options",
+                                    tint = Color.White,
+                                )
                             }
                             DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
                                 DropdownMenuItem(
@@ -184,19 +188,35 @@ fun LibraryScreen(
                                 )
                             }
                         }
+                        // DropdownMenu for Sort is rendered at root because DropdownMenu
+                        // can't be a direct child of AppTopBar's actions slot.
+                        DropdownMenu(expanded = sortMenuOpen, onDismissRequest = { sortMenuOpen = false }) {
+                            SortMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = { Text(mode.label) },
+                                    trailingIcon = {
+                                        if (mode == state.sort) Icon(Icons.Filled.Check, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        viewModel.setSort(mode)
+                                        sortMenuOpen = false
+                                    },
+                                )
+                            }
+                        }
                     },
                 )
             } else {
-                TopAppBar(
-                    navigationIcon = {
-                        IconButton(onClick = viewModel::clearSelection) {
-                            Icon(Icons.Filled.Close, contentDescription = "Exit selection")
-                        }
-                    },
-                    title = { Text("${state.selectedIds.size} selected") },
+                AppTopBar(
+                    title = "${state.selectedIds.size} selected",
+                    onBack = viewModel::clearSelection,
                     actions = {
                         IconButton(onClick = viewModel::selectAllVisible) {
-                            Icon(Icons.Filled.SelectAll, contentDescription = "Select all")
+                            Icon(
+                                Icons.Filled.SelectAll,
+                                contentDescription = "Select all",
+                                tint = Color.White,
+                            )
                         }
                     },
                 )
@@ -204,19 +224,15 @@ fun LibraryScreen(
         },
         bottomBar = {
             if (state.selectionActive) {
-                BottomAppBar(
-                    actions = {
-                        Spacer(Modifier.width(8.dp))
-                        Text("${state.selectedIds.size} selected", style = MaterialTheme.typography.labelLarge)
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = { dialog = Dlg.MoveToShelf }) { Text("Shelf") }
-                        TextButton(onClick = viewModel::downloadSelected) { Text("Download") }
-                        IconButton(onClick = { dialog = Dlg.ConfirmDeleteSelected }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Delete selected")
-                        }
-                        Spacer(Modifier.width(8.dp))
-                    },
-                )
+                NavigationBar {
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { dialog = Dlg.MoveToShelf }) { Text("Shelf") }
+                    TextButton(onClick = viewModel::downloadSelected) { Text("Download") }
+                    IconButton(onClick = { dialog = Dlg.ConfirmDeleteSelected }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete selected", tint = MaterialTheme.colorScheme.error)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                }
             } else {
                 NavigationBar {
                     LibTab.entries.forEach { tab ->
@@ -242,9 +258,9 @@ fun LibraryScreen(
         },
         floatingActionButton = {
             if (state.tab == LibTab.LIBRARY && !state.selectionActive) {
-                ExtendedFloatingActionButton(
-                    text = { Text("Import books") },
-                    icon = { Icon(Icons.Filled.FileUpload, contentDescription = null) },
+                PillButton(
+                    text = "Import books",
+                    icon = Icons.Filled.FileUpload,
                     onClick = {
                         importLauncher.launch(
                             arrayOf(
@@ -373,15 +389,25 @@ private fun LibraryTabContent(
     onLongPress: (String) -> Unit,
 ) {
     Column(modifier = modifier.fillMaxSize()) {
-        OutlinedTextField(
+        // Greeting header (v1.3)
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+            Text(
+                "Welcome back",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "Discover your next read",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+        }
+
+        SearchField(
             value = state.searchText,
             onValueChange = onSearch,
-            label = { Text("Search title or description") },
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+            placeholder = "Search title or description",
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
 
         val anyFilter = state.filterFormats.isNotEmpty() || state.filterTagId != null ||
@@ -392,7 +418,7 @@ private fun LibraryTabContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 4.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             listOf("epub", "pdf", "cbz").forEach { format ->
                 FilterChip(
@@ -465,15 +491,15 @@ private fun LibraryTabContent(
         }
 
         if (state.continueReading.isNotEmpty()) {
-            Text(
-                "Continue reading",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            SectionHeader(
+                title = "Continue reading",
+                actionLabel = if (state.continueReading.size > 3) "See more" else null,
+                onAction = null,
             )
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp),
-                modifier = Modifier.padding(bottom = 4.dp),
+                modifier = Modifier.padding(bottom = 8.dp),
             ) {
                 listItems(state.continueReading, key = { it.id }) { book ->
                     ContinueCard(
@@ -490,17 +516,15 @@ private fun LibraryTabContent(
             state.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            state.books.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (state.searchText.isNotBlank() || anyFilter) {
-                        "No books match."
-                    } else {
-                        "Your library is empty.\nUse “Import books” to add EPUB, PDF or CBZ files."
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            state.books.isEmpty() -> com.bookcon.app.ui.components.EmptyState(
+                title = if (state.searchText.isNotBlank() || anyFilter) "No matches" else "Your library is empty",
+                message = if (state.searchText.isNotBlank() || anyFilter) {
+                    "Try a different search or clear the filters."
+                } else {
+                    "Use the Import books button to add EPUB, PDF or CBZ files."
+                },
+                illustration = Icons.Filled.AutoStories,
+            )
             state.gridView -> BooksGrid(
                 state = state,
                 modifier = Modifier.weight(1f),
@@ -532,7 +556,7 @@ private fun BooksGrid(
         modifier = modifier.fillMaxSize(),
     ) {
         gridItems(state.books, key = { it.id }) { book ->
-            BookCard(
+            BookCardGrid(
                 book = book,
                 serverUrl = state.serverUrl,
                 progress = state.progressPercent[book.id],
@@ -552,42 +576,43 @@ private fun BooksList(
     onLongPress: (String) -> Unit,
 ) {
     LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp),
         modifier = modifier.fillMaxSize(),
     ) {
         listItems(state.books, key = { it.id }) { book ->
-            BookListItem(
-                book = book,
+            BookListRow(
+                title = book.title,
+                subtitle = book.authors.joinToString(", ").ifBlank { book.format.uppercase() },
+                coverUrl = book.coverUrl,
                 serverUrl = state.serverUrl,
-                progress = state.progressPercent[book.id],
-                selected = book.id in state.selectedIds,
                 onClick = { onOpenDetails(book.id) },
-                onLongClick = { onLongPress(book.id) },
+                format = book.format,
+                trailing = {
+                    androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
+                        when (book.downloadState) {
+                            DownloadState.DOWNLOADING -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            DownloadState.READY -> Icon(Icons.Filled.CheckCircle, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
+                            DownloadState.FAILED -> Icon(Icons.Filled.Error, contentDescription = "Download failed", tint = MaterialTheme.colorScheme.error)
+                            else -> Unit
+                        }
+                        if (book.id in state.selectedIds) {
+                            Spacer(Modifier.width(6.dp))
+                            Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                },
+                modifier = Modifier.combinedClickable(
+                    onClick = { onOpenDetails(book.id) },
+                    onLongClick = { onLongPress(book.id) },
+                ),
             )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
         }
     }
 }
 
 @Composable
-private fun CoverImage(
-    coverUrl: String?,
-    serverUrl: String,
-    contentDescription: String?,
-    modifier: Modifier = Modifier,
-) {
-    Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
-        Image(
-            painter = rememberBookPainter(resolveCoverUrl(serverUrl, coverUrl)),
-            contentDescription = contentDescription,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-    }
-}
-
-@Composable
-private fun BookCard(
+private fun BookCardGrid(
     book: BookEntity,
     serverUrl: String,
     progress: Double?,
@@ -596,12 +621,12 @@ private fun BookCard(
     onLongClick: () -> Unit,
 ) {
     Card(
-        shape = RoundedCornerShape(12.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = MaterialTheme.shapes.medium,
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = if (selected) {
             androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
         } else {
-            null
+            androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         },
         modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
     ) {
@@ -610,23 +635,23 @@ private fun BookCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(0.7f)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp)),
+                    .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)),
             ) {
-                CoverImage(book.coverUrl, serverUrl, contentDescription = book.title, modifier = Modifier.fillMaxSize())
-                Surface(
-                    color = Color.Black.copy(alpha = 0.6f),
-                    shape = RoundedCornerShape(6.dp),
+                BookCover(
+                    coverUrl = book.coverUrl,
+                    title = book.title,
+                    serverUrl = serverUrl,
+                    modifier = Modifier.fillMaxWidth().aspectRatio(0.7f),
+                    cornerRadius = 0.dp,
+                )
+                FormatChip(
+                    book.format,
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(6.dp),
-                ) {
-                    Text(
-                        book.format.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                    )
-                }
+                    background = Color.Black.copy(alpha = 0.6f),
+                    foreground = Color.White,
+                )
                 if (progress != null && progress > 0.0) {
                     Surface(
                         color = Color.Black.copy(alpha = 0.65f),
@@ -647,7 +672,7 @@ private fun BookCard(
             Column(Modifier.padding(10.dp)) {
                 Text(
                     book.title,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -675,78 +700,25 @@ private fun BookCard(
 }
 
 @Composable
-private fun BookListItem(
-    book: BookEntity,
-    serverUrl: String,
-    progress: Double?,
-    selected: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-) {
-    Card(
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
-    ) {
-        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            CoverImage(
-                coverUrl = book.coverUrl,
-                serverUrl = serverUrl,
-                contentDescription = null,
-                modifier = Modifier.width(52.dp).aspectRatio(0.7f).clip(RoundedCornerShape(6.dp)),
-            )
-            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                Text(
-                    book.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    book.authors.joinToString(", ").ifBlank { book.format.uppercase() },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (progress != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LinearProgressIndicator(
-                            progress = { (progress / 100.0).toFloat().coerceIn(0f, 1f) },
-                            modifier = Modifier.weight(1f).height(4.dp),
-                        )
-                        Text("  ${progress.toInt()}%", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-            when (book.downloadState) {
-                DownloadState.DOWNLOADING -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                DownloadState.READY -> Icon(Icons.Filled.CheckCircle, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
-                DownloadState.FAILED -> Icon(Icons.Filled.Error, contentDescription = "Download failed", tint = MaterialTheme.colorScheme.error)
-                else -> Unit
-            }
-            if (selected) {
-                Spacer(Modifier.width(6.dp))
-                Icon(Icons.Filled.Check, contentDescription = "Selected", tint = MaterialTheme.colorScheme.primary)
-            }
-        }
-    }
-}
-
-@Composable
 private fun ContinueCard(
     book: BookEntity,
     serverUrl: String,
     progress: Double?,
     onClick: () -> Unit,
 ) {
-    Column(Modifier.width(112.dp).clickable(onClick = onClick)) {
-        CoverImage(
+    Column(
+        Modifier
+            .width(112.dp)
+            .clickable(onClick = onClick),
+    ) {
+        BookCover(
             coverUrl = book.coverUrl,
+            title = book.title,
             serverUrl = serverUrl,
-            contentDescription = book.title,
-            modifier = Modifier.fillMaxWidth().aspectRatio(0.68f).clip(RoundedCornerShape(10.dp)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(0.68f),
+            cornerRadius = 10.dp,
         )
         LinearProgressIndicator(
             progress = { ((progress ?: 0.0) / 100.0).toFloat().coerceIn(0f, 1f) },
@@ -845,7 +817,7 @@ private fun NameDialog(title: String, onCancel: () -> Unit, onConfirm: (String) 
         onDismissRequest = onCancel,
         title = { Text(title) },
         text = {
-            OutlinedTextField(
+            androidx.compose.material3.OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
                 singleLine = true,
