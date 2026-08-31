@@ -15,6 +15,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.DarkMode
@@ -86,6 +87,7 @@ fun PdfPager(
     onToggleThumbs: () -> Unit = {},
     onJumpTo: (Int) -> Unit = {},
     pageAnimation: String = "slide",
+    onTogglePageAnimation: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -291,6 +293,14 @@ fun PdfPager(
                         Icons.Outlined.DarkMode,
                         contentDescription = if (nightMode) "Night mode on" else "Night mode off",
                         tint = if (nightMode) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                IconButton(onClick = onTogglePageAnimation, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.MenuBook,
+                        contentDescription = if (pageAnimation == "page_turn") "Animation: page turn" else "Animation: slide",
+                        tint = if (pageAnimation == "page_turn") MaterialTheme.colorScheme.primary else LocalContentColor.current,
                         modifier = Modifier.size(22.dp),
                     )
                 }

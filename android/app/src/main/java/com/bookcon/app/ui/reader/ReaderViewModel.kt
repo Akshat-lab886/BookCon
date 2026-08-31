@@ -1147,6 +1147,13 @@ class ReaderViewModel @Inject constructor(
     fun setPageTurnAnimation(animation: String) =
         updateSettings { it.copy(readerPageTurnAnimation = animation) }
 
+    /** Quick chrome toggle: flip between Slide and Page turn (v1.4 demo convenience). */
+    fun togglePageTurnAnimation() = updateSettings {
+        it.copy(
+            readerPageTurnAnimation = if (it.readerPageTurnAnimation == "page_turn") "slide" else "page_turn",
+        )
+    }
+
     fun setFontSizeSp(value: Float) =
         updateSettings { it.copy(readerFontSizeSp = value.coerceIn(12f, 36f)) }
 

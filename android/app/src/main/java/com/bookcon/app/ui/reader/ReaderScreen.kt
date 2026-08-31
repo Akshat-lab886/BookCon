@@ -137,15 +137,16 @@ fun ReaderScreen(bookId: String, onClose: () -> Unit) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
 
-    // RD-13: auto-hide chrome after 2s of idle while reading.
+    // RD-13: auto-hide chrome after 15s of idle while reading.
     LaunchedEffect(state.chromeVisible, state.panel, state.phase) {
         if (state.chromeVisible &&
             state.panel == ReaderPanel.NONE &&
             state.phase == ReaderPhase.READY
         ) {
             // Debug builds keep chrome up much longer so automated UI tests can
-            // reach toolbar buttons before it slides away.
-            delay(if (com.bookcon.app.BuildConfig.DEBUG) 20_000L else 2_000L)
+            // reach toolbar buttons before it slides away. Release gives the
+            // reader ~15s to flip settings (Slide → Page turn) before fading.
+            delay(if (com.bookcon.app.BuildConfig.DEBUG) 20_000L else 15_000L)
             viewModel.setChromeVisible(false)
         }
     }
@@ -322,6 +323,7 @@ private fun ReaderContentHost(
                 turnRequest = viewModel.pdfTurnRequest.collectAsStateWithLifecycle().value,
                 onTurnRequestConsumed = { viewModel.consumePdfTurnRequest() },
                 pageAnimation = settings.readerPageTurnAnimation,
+                onTogglePageAnimation = viewModel::togglePageTurnAnimation,
                 modifier = Modifier.fillMaxSize(),
             )
 
