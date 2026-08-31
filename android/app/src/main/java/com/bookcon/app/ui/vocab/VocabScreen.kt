@@ -13,17 +13,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -32,8 +31,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bookcon.app.ui.components.AppTopBar
+import com.bookcon.app.ui.components.EmptyState
+import com.bookcon.app.ui.components.OutlinePillButton
+import com.bookcon.app.ui.components.PillButton
 
-/** Vocabulary notebook: due-card review + browse list + auto-capture toggle (PRD VOC-*). */
+/** Vocabulary notebook: due-card review + browse list + auto-capture toggle (PRD VOC-*).
+ *  v1.3 redesign: blue AppTopBar, hairline-bordered cards, pill review buttons,
+ *  EmptyState illustration when no words saved. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VocabScreen(
@@ -47,31 +52,26 @@ fun VocabScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Vocabulary") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            AppTopBar(
+                title = "Vocabulary",
+                subtitle = if (entries.isNotEmpty()) "${entries.size} word${if (entries.size == 1) "" else "s"} saved" else null,
+                onBack = onBack,
             )
         },
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
+                .padding(padding),
         ) {
+            // Auto-capture toggle row
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    "${entries.size} words saved",
-                    style = MaterialTheme.typography.titleMedium,
-                )
                 FilterChip(
                     selected = settings.vocabCaptureEnabled,
                     onClick = { viewModel.setCaptureEnabled(!settings.vocabCaptureEnabled) },
@@ -79,95 +79,154 @@ fun VocabScreen(
                 )
             }
 
-            Spacer(Modifier.height(12.dp))
-
             if (due.isNotEmpty()) {
                 val card = due.first()
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            card.word.replaceFirstChar { it.uppercase() },
-                            style = MaterialTheme.typography.headlineSmall,
-                            textAlign = TextAlign.Center,
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        if (revealed) {
-                            Text(card.definition, style = MaterialTheme.typography.bodyMedium)
-                            Spacer(Modifier.height(14.dp))
-                        } else {
-                            Text(
-                                "Tap to reveal",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(14.dp))
-                        }
-                        if (!revealed) {
-                            TextButton(onClick = viewModel::toggleRevealed) { Text("Reveal") }
-                        } else {
-                            Row {
-                                TextButton(onClick = { viewModel.gradeCurrent(false) }) {
-                                    Text("Again")
-                                }
-                                TextButton(onClick = { viewModel.gradeCurrent(true) }) {
-                                    Text("Got it")
-                                }
-                            }
-                        }
-                        Text(
-                            "Due now: ${due.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-
-            if (entries.isEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 48.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
                 ) {
-                    Text(
-                        "No saved words yet",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Look up a word while reading and save it here to review later.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
+                    ReviewCard(
+                        word = card.word,
+                        definition = card.definition,
+                        revealed = revealed,
+                        dueCount = due.size,
+                        onReveal = viewModel::toggleRevealed,
+                        onAgain = { viewModel.gradeCurrent(false) },
+                        onGotIt = { viewModel.gradeCurrent(true) },
                     )
                 }
+            }
+
+            if (entries.isEmpty()) {
+                EmptyState(
+                    title = "No saved words yet",
+                    message = "Look up a word while reading and save it here to review later.",
+                    illustration = Icons.Outlined.MenuBook,
+                )
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp),
+                ) {
                     items(entries, key = { it.word }) { entry ->
-                        ListItem(
-                            headlineContent = { Text(entry.word) },
-                            supportingContent = {
-                                Text(
-                                    entry.definition,
-                                    maxLines = 2,
-                                )
-                            },
-                            trailingContent = {
-                                IconButton(onClick = { viewModel.remove(entry.word) }) {
-                                    Icon(Icons.Outlined.Delete, contentDescription = "Delete ${entry.word}")
-                                }
-                            },
+                        WordRow(
+                            word = entry.word,
+                            definition = entry.definition,
+                            onDelete = { viewModel.remove(entry.word) },
                         )
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ReviewCard(
+    word: String,
+    definition: String,
+    revealed: Boolean,
+    dueCount: Int,
+    onReveal: () -> Unit,
+    onAgain: () -> Unit,
+    onGotIt: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                "Review",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                word.replaceFirstChar { it.uppercase() },
+                style = MaterialTheme.typography.headlineMedium,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(12.dp))
+            if (revealed) {
+                Text(
+                    definition,
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(20.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinePillButton(
+                        text = "Again",
+                        onClick = onAgain,
+                    )
+                    PillButton(
+                        text = "Got it",
+                        onClick = onGotIt,
+                        container = MaterialTheme.colorScheme.primary,
+                        content = MaterialTheme.colorScheme.onPrimary,
+                    )
+                }
+            } else {
+                Spacer(Modifier.height(12.dp))
+                PillButton(
+                    text = "Tap to reveal",
+                    onClick = onReveal,
+                    container = MaterialTheme.colorScheme.primaryContainer,
+                    content = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "$dueCount due now",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WordRow(
+    word: String,
+    definition: String,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                word,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            if (definition.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    definition,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+            }
+        }
+        IconButton(onClick = onDelete) {
+            Icon(
+                Icons.Outlined.Delete,
+                contentDescription = "Delete $word",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

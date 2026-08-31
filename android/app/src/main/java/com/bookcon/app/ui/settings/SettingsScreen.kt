@@ -9,18 +9,24 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.MenuBook
@@ -39,9 +45,9 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,10 +56,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bookcon.app.ui.components.AppTopBar
 
 private val THEME_OPTIONS = listOf(
     "auto" to "Follow system",
@@ -63,7 +72,9 @@ private val THEME_OPTIONS = listOf(
     "sepia" to "Sepia",
 )
 
-/** Settings (PRD SET-*): account, appearance, sync, reader defaults stub, about/licenses. */
+/** Settings (PRD SET-*): account, appearance, sync, reader defaults, about/licenses.
+ *  v1.3 redesign: blue AppTopBar with rounded bottom, grouped cards with circular
+ *  tinted icon avatars + chevron rows. */
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -93,13 +104,9 @@ fun SettingsScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                title = { Text("Settings") },
+            AppTopBar(
+                title = "Settings",
+                onBack = onBack,
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -111,22 +118,47 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
         ) {
-            SectionCard("Account", icon = null) {
+            // ---- Account ----------------------------------------------------
+            SettingsSectionHeader("Account")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text(viewModel.accountEmail.ifBlank { "Not signed in" }) },
-                    supportingContent = { Text("BookCon account") },
+                    headlineContent = {
+                        Text(
+                            if (viewModel.accountEmail.isBlank()) "Not signed in"
+                            else viewModel.accountEmail,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    },
+                    supportingContent = {
+                        Text(
+                            "BookCon account",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.Info, MaterialTheme.colorScheme.primaryContainer) },
+                    trailingContent = { Chevron() },
                 )
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ListItem(
-                    headlineContent = { Text("Sign out") },
-                    supportingContent = { Text("Stops sync on this device") },
-                    leadingContent = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
+                    headlineContent = { Text("Sign out", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Stops sync on this device",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.AutoMirrored.Filled.Logout, MaterialTheme.colorScheme.errorContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable { confirmSignOut = true },
                 )
             }
 
-            SectionCard("Appearance", icon = Icons.Filled.Palette) {
-                THEME_OPTIONS.forEach { (mode, label) ->
+            // ---- Appearance -------------------------------------------------
+            SettingsSectionHeader("Appearance")
+            SettingsCard {
+                THEME_OPTIONS.forEachIndexed { i, (mode, label) ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -134,87 +166,181 @@ fun SettingsScreen(
                             .clickable { viewModel.setThemeMode(mode) }
                             .padding(horizontal = 8.dp),
                     ) {
-                        RadioButton(selected = settings.themeMode == mode, onClick = { viewModel.setThemeMode(mode) })
-                        Text(label)
+                        RadioButton(
+                            selected = settings.themeMode == mode,
+                            onClick = { viewModel.setThemeMode(mode) },
+                        )
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                    if (i < THEME_OPTIONS.lastIndex) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                            modifier = Modifier.padding(start = 16.dp),
+                        )
                     }
                 }
             }
 
-            SectionCard("Sync", icon = Icons.Filled.Sync) {
+            // ---- Sync -------------------------------------------------------
+            SettingsSectionHeader("Sync")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text("Last synced") },
-                    supportingContent = { Text(formatStamp(lastSyncedAt)) },
+                    headlineContent = { Text("Last synced", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            formatStamp(lastSyncedAt),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.Sync, MaterialTheme.colorScheme.primaryContainer) },
                 )
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ListItem(
-                    headlineContent = { Text("Force sync now") },
-                    supportingContent = { Text("Push local changes, pull remote updates") },
-                    leadingContent = { Icon(Icons.Filled.Sync, contentDescription = null) },
+                    headlineContent = { Text("Force sync now", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Push local changes, pull remote updates",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.Sync, MaterialTheme.colorScheme.secondaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable { viewModel.forceSync() },
                 )
             }
 
-            SectionCard("Library & storage", icon = Icons.Filled.Storage) {
+            // ---- Library & Storage -----------------------------------------
+            SettingsSectionHeader("Library & storage")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text("Devices") },
-                    supportingContent = { Text("Manage signed-in devices") },
-                    leadingContent = { Icon(Icons.Filled.Devices, contentDescription = null) },
+                    headlineContent = { Text("Devices", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Manage signed-in devices",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.Devices, MaterialTheme.colorScheme.primaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable(onClick = openDevices),
                 )
-                HorizontalDivider()
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ListItem(
-                    headlineContent = { Text("Storage manager") },
-                    supportingContent = { Text("Downloaded books and import staging") },
-                    leadingContent = { Icon(Icons.Filled.Storage, contentDescription = null) },
+                    headlineContent = { Text("Storage manager", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Downloaded books and import staging",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.Storage, MaterialTheme.colorScheme.secondaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable(onClick = openStorage),
                 )
             }
 
-            // Reader defaults live in the reader package; link row kept as a stub here.
-            SectionCard("Reader defaults", icon = Icons.Filled.MenuBook) {
-                // TODO(reader-package): navigate to ReaderDefaultsScreen when it exists.
+            // ---- Reader defaults --------------------------------------------
+            SettingsSectionHeader("Reader defaults")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text("Font, spacing, pagination…") },
-                    supportingContent = { Text("Adjust while reading any book (reader toolbar)") },
-                    leadingContent = { Icon(Icons.Filled.MenuBook, contentDescription = null) },
+                    headlineContent = { Text("Font, spacing, pagination…", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Adjust while reading any book (reader toolbar)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.MenuBook, MaterialTheme.colorScheme.primaryContainer) },
                 )
             }
 
-            SectionCard("AI", icon = Icons.Outlined.AutoAwesome) {
+            // ---- AI --------------------------------------------------------
+            SettingsSectionHeader("AI")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text("AI summary") },
-                    supportingContent = { Text("Bring your own key — summarize pages") },
-                    leadingContent = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
+                    headlineContent = { Text("AI summary", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Bring your own key — summarize pages",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Outlined.AutoAwesome, MaterialTheme.colorScheme.secondaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable(onClick = openAiSummary),
                 )
             }
 
-            SectionCard("Reading", icon = Icons.Outlined.MenuBook) {
+            // ---- Reading ---------------------------------------------------
+            SettingsSectionHeader("Reading")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text("Vocabulary") },
-                    supportingContent = { Text("Saved words with spaced-repetition review") },
-                    leadingContent = { Icon(Icons.Outlined.Spellcheck, contentDescription = null) },
+                    headlineContent = { Text("Vocabulary", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Saved words with spaced-repetition review",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Outlined.Spellcheck, MaterialTheme.colorScheme.primaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable(onClick = openVocab),
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ListItem(
-                    headlineContent = { Text("Reading stats") },
-                    supportingContent = { Text("Daily minutes, streaks and goals") },
-                    leadingContent = { Icon(Icons.Outlined.BarChart, contentDescription = null) },
+                    headlineContent = { Text("Reading stats", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Daily minutes, streaks and goals",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Outlined.BarChart, MaterialTheme.colorScheme.secondaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable(onClick = openStats),
                 )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ListItem(
-                    headlineContent = { Text("Import over Wi-Fi") },
-                    supportingContent = { Text("Send books from a browser on the same network") },
-                    leadingContent = { Icon(Icons.Outlined.Wifi, contentDescription = null) },
+                    headlineContent = { Text("Import over Wi-Fi", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Send books from a browser on the same network",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Outlined.Wifi, MaterialTheme.colorScheme.primaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable(onClick = openWifiImport),
                 )
             }
 
-            SectionCard("About", icon = Icons.Filled.Info) {
+            // ---- About ----------------------------------------------------
+            SettingsSectionHeader("About")
+            SettingsCard {
                 ListItem(
-                    headlineContent = { Text("About BookCon") },
-                    supportingContent = { Text("Version 1.3.1 · Open-source licenses") },
-                    leadingContent = { Icon(Icons.Filled.Info, contentDescription = null) },
+                    headlineContent = { Text("About BookCon", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Version 1.4.0 · Open-source licenses",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.Filled.Info, MaterialTheme.colorScheme.primaryContainer) },
+                    trailingContent = { Chevron() },
                     modifier = Modifier.clickable { showLicenses = true },
                 )
             }
@@ -240,17 +366,55 @@ fun SettingsScreen(
     }
 }
 
+/** Section header above each card group, matches the reference's title style. */
 @Composable
-private fun SectionCard(title: String, icon: ImageVector?, content: @Composable () -> Unit) {
+private fun SettingsSectionHeader(title: String) {
     Text(
         title,
         style = MaterialTheme.typography.titleSmall,
         color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 16.dp, bottom = 6.dp, start = 4.dp),
+        modifier = Modifier.padding(top = 20.dp, bottom = 8.dp, start = 4.dp),
     )
-    Card(colors = CardDefaults.cardColors(), modifier = Modifier.fillMaxWidth()) {
+}
+
+/** Card wrapping a group of related rows, with hairline border + zero elevation. */
+@Composable
+private fun SettingsCard(content: @Composable () -> Unit) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
         Column { content() }
     }
+}
+
+/** Round tinted avatar used in the leading slot of a settings row. */
+@Composable
+private fun AvatarCircle(icon: ImageVector, background: Color) {
+    Surface(
+        color = background,
+        shape = CircleShape,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(8.dp),
+        )
+    }
+}
+
+@Composable
+private fun Chevron() {
+    Icon(
+        Icons.Filled.ChevronRight,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 private fun formatStamp(epochMillis: Long?): String =

@@ -1,3 +1,16 @@
-*.idsig
+# Build outputs
+*.apk
+*.apk.idsig
+build/
+.gradle-home/
+build-tools-35.zip
+
+# Project artefacts that shouldn't be in source control
+.DS_Store
+android/.DS_Store
+android/app/.DS_Store
+android/app/bookcon-release.jks
+server/.DS_Store
+.android-sdk/
+.buildhome/
 BookCon-*.apk.idsig
-BookCon-debug-signed.apk
