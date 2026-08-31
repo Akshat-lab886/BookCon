@@ -24,6 +24,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -85,6 +86,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -502,8 +504,6 @@ private fun ReaderContentHost(
             ReaderTopBar(
                 title = state.chapterTitle.ifBlank { state.book?.title.orEmpty() },
                 remainingPercent = state.remainingPercent,
-                onSummarize = { viewModel.summarizeCurrentPage() },
-                onToggleReadAloud = { viewModel.toggleReadAloud() },
                 onClose = onClose,
             )
         }
@@ -520,6 +520,8 @@ private fun ReaderContentHost(
                 onBookmarks = { viewModel.setPanel(ReaderPanel.BOOKMARKS) },
                 onSearch = { viewModel.setPanel(ReaderPanel.SEARCH) },
                 onTextSettings = { viewModel.setPanel(ReaderPanel.SETTINGS) },
+                onSummarize = { viewModel.summarizeCurrentPage() },
+                onToggleReadAloud = { viewModel.toggleReadAloud() },
                 onClose = onClose,
             )
         }
@@ -757,53 +759,53 @@ private fun SummarySheet(
     }
 }
 
-/** RD-13 top bar: chapter title, remaining %, AI summary, battery stub, close. */
+/** v1.4 floating top bar: transparent over the page, with a back chip on the left
+ *  and the battery on the right. AI summarize + read-aloud moved into the bottom pill. */
 @Composable
 private fun ReaderTopBar(
     title: String,
     remainingPercent: Float?,
-    onSummarize: () -> Unit,
-    onToggleReadAloud: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+            .background(Color.Black.copy(alpha = 0.32f))
             .statusBarsPadding()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onClose) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close reader")
-        }
+        ReaderChromeIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Close reader",
+            onClick = onClose,
+        )
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 text = title.ifBlank { "Reading" },
                 style = MaterialTheme.typography.titleSmall,
+                color = Color.White,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            Text(
-                text = remainingPercent
-                    ?.let { "${(it * 100).toInt().coerceIn(0, 100)}% left" }
-                    .orEmpty(),
-                style = MaterialTheme.typography.labelSmall,
-                maxLines = 1,
-            )
+            remainingPercent?.let {
+                Text(
+                    text = "${(it * 100).toInt().coerceIn(0, 100)}% left",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.7f),
+                    maxLines = 1,
+                )
+            }
         }
-        IconButton(onClick = onSummarize) {
-            Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
-        }
-        IconButton(onClick = onToggleReadAloud) {
-            Icon(Icons.Outlined.Headphones, contentDescription = "Read aloud")
-        }
-        BatteryStub(modifier = Modifier.padding(end = 8.dp))
+        BatteryStubWhite()
+        Spacer(Modifier.width(8.dp))
     }
 }
 
-/** RD-13 bottom bar: TOC, bookmark add/list, search, text settings, close. */
+/** v1.4 floating bottom pill: a single rounded chip hosting all reader controls
+ *  (TOC, bookmarks add/list, search, text settings, AI, read-aloud, back). */
 @Composable
 private fun ReaderBottomBar(
     bookmarkCount: Int,
@@ -812,39 +814,117 @@ private fun ReaderBottomBar(
     onBookmarks: () -> Unit,
     onSearch: () -> Unit,
     onTextSettings: () -> Unit,
+    onSummarize: () -> Unit,
+    onToggleReadAloud: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
-            .navigationBarsPadding()
-            .padding(horizontal = 4.dp, vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp)
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
     ) {
-        IconButton(onClick = onTableOfContents) {
-            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Table of contents")
+        Row(
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+                )
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ReaderChromeIconButton(Icons.AutoMirrored.Filled.List, "Table of contents", onTableOfContents)
+            ReaderChromeIconButton(Icons.Filled.BookmarkAdd, "Add bookmark", onToggleBookmark)
+            ReaderChromeIconButton(
+                icon = Icons.Filled.Bookmark,
+                contentDescription = "Bookmarks",
+                onClick = onBookmarks,
+                badge = if (bookmarkCount > 0) bookmarkCount.toString() else null,
+            )
+            ReaderChromeIconButton(Icons.Filled.Search, "Search", onSearch)
+            ReaderChromeIconButton(Icons.Filled.TextFields, "Reading settings", onTextSettings)
+            // Spacer to visually separate "page actions" from "AI actions"
+            androidx.compose.foundation.layout.Box(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .size(width = 1.dp, height = 24.dp)
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+            )
+            ReaderChromeIconButton(
+                icon = Icons.Outlined.AutoAwesome,
+                contentDescription = "Summarize page",
+                onClick = onSummarize,
+                accent = MaterialTheme.colorScheme.secondary,
+            )
+            ReaderChromeIconButton(
+                icon = Icons.Outlined.Headphones,
+                contentDescription = "Read aloud",
+                onClick = onToggleReadAloud,
+                accent = MaterialTheme.colorScheme.secondary,
+            )
+            ReaderChromeIconButton(
+                icon = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                onClick = onClose,
+            )
         }
-        IconButton(onClick = onToggleBookmark) {
-            Icon(Icons.Filled.BookmarkAdd, contentDescription = "Add bookmark")
-        }
-        IconButton(onClick = onBookmarks) {
-            BadgedBox(badge = {
-                if (bookmarkCount > 0) Badge { Text(bookmarkCount.toString()) }
-            }) {
-                Icon(Icons.Filled.Bookmark, contentDescription = "Bookmarks")
+    }
+}
+
+/** Chrome icon button: circular tap target inside the floating pill, optional badge. */
+@Composable
+private fun ReaderChromeIconButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+    accent: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface,
+    badge: String? = null,
+) {
+    androidx.compose.material3.BadgedBox(
+        badge = {
+            if (badge != null) {
+                androidx.compose.material3.Badge { Text(badge, style = MaterialTheme.typography.labelSmall) }
             }
+        },
+    ) {
+        IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+            Icon(
+                icon,
+                contentDescription = contentDescription,
+                tint = accent,
+                modifier = Modifier.size(22.dp),
+            )
         }
-        IconButton(onClick = onSearch) {
-            Icon(Icons.Filled.Search, contentDescription = "Search")
-        }
-        IconButton(onClick = onTextSettings) {
-            Icon(Icons.Filled.TextFields, contentDescription = "Reading settings")
-        }
-        IconButton(onClick = onClose) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+    }
+}
+
+/** Battery indicator rendered in white-on-dark for the transparent top bar. */
+@Composable
+private fun BatteryStubWhite() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val level = remember(context) {
+        runCatching {
+            val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val raw = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            if (raw >= 0 && scale > 0) raw * 100 / scale else -1
+        }.getOrDefault(-1)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            Icons.Filled.BatteryFull,
+            contentDescription = "Battery",
+            tint = Color.White,
+            modifier = Modifier.size(18.dp),
+        )
+        if (level >= 0) {
+            Text(
+                "$level%",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                modifier = Modifier.padding(start = 4.dp),
+            )
         }
     }
 }

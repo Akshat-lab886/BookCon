@@ -215,42 +215,83 @@ fun PdfPager(
             modifier = Modifier.fillMaxSize(),
         )
 
-        // Page indicator pill + AI page-summary shortcut (PDF top chrome).
-        Surface(
-            tonalElevation = 3.dp,
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        // Page indicator pill + AI page-summary shortcut (PDF top chrome, v1.4 transparent).
+        androidx.compose.foundation.layout.Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 28.dp),
+                .padding(top = 28.dp, start = 8.dp, end = 8.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .background(
+                        color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.32f),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    text = "$title · page ${pagerState.currentPage + 1} of ${pdf.pageCount}",
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 16.dp),
+                    text = "Page ${pagerState.currentPage + 1} of ${pdf.pageCount}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = androidx.compose.ui.graphics.Color.White,
                 )
-                IconButton(onClick = onSummarize) {
-                    Icon(Icons.Outlined.AutoAwesome, contentDescription = "Summarize page")
+            }
+        }
+        // Floating bottom pill for PDF reader controls (v1.4).
+        androidx.compose.foundation.layout.Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 12.dp, bottom = 28.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(
+                modifier = Modifier
+                    .background(
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
+                    )
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onSummarize, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Outlined.AutoAwesome,
+                        contentDescription = "Summarize page",
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
-                IconButton(onClick = onToggleReadAloud) {
-                    Icon(Icons.Outlined.Headphones, contentDescription = "Read aloud")
+                IconButton(onClick = onToggleReadAloud, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Outlined.Headphones,
+                        contentDescription = "Read aloud",
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(22.dp),
+                    )
                 }
-                IconButton(onClick = onToggleThumbs) {
+                androidx.compose.foundation.layout.Box(
+                    modifier = Modifier
+                        .padding(horizontal = 4.dp)
+                        .size(width = 1.dp, height = 24.dp)
+                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                )
+                IconButton(onClick = onToggleThumbs, modifier = Modifier.size(40.dp)) {
                     Icon(
                         Icons.Outlined.Collections,
                         contentDescription = "Page thumbnails",
                         tint = if (showThumbs) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
-                IconButton(onClick = onToggleNightMode) {
+                IconButton(onClick = onToggleNightMode, modifier = Modifier.size(40.dp)) {
                     Icon(
                         Icons.Outlined.DarkMode,
                         contentDescription = if (nightMode) "Night mode on" else "Night mode off",
                         tint = if (nightMode) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
             }
