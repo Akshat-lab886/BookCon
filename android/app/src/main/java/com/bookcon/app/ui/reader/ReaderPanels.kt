@@ -556,7 +556,12 @@ private fun LayoutTab(settings: AppSettings, viewModel: ReaderViewModel) {
     // RD-2 page turn animation.
     Text("Page turn animation", style = MaterialTheme.typography.titleSmall)
     SegmentedRow(
-        options = listOf("none" to "None", "slide" to "Slide", "fade" to "Fade"),
+        options = listOf(
+            "none" to "None",
+            "slide" to "Slide",
+            "fade" to "Fade",
+            "page_turn" to "Page turn",
+        ),
         selected = settings.readerPageTurnAnimation,
     ) { viewModel.setPageTurnAnimation(it) }
 }

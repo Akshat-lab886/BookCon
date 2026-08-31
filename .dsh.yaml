@@ -1,0 +1,3 @@
+agent-default-model:
+  provider: kiraai
+  model: glm-5.3-flash

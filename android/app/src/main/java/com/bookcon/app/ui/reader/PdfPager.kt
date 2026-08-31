@@ -85,6 +85,7 @@ fun PdfPager(
     showThumbs: Boolean = false,
     onToggleThumbs: () -> Unit = {},
     onJumpTo: (Int) -> Unit = {},
+    pageAnimation: String = "slide",
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -149,7 +150,11 @@ fun PdfPager(
     }
 
     Box(modifier.fillMaxSize()) {
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
+        AnimatedPager(
+            state = pagerState,
+            animation = PageAnimation.fromId(pageAnimation),
+            modifier = Modifier.fillMaxSize(),
+        ) { index ->
             val bmp = pageCache[index]
             Box(
                 Modifier

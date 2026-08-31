@@ -49,7 +49,7 @@ data class AppSettings(
     val readerMarginsHorizontal: Float = 24f,
     val readerMarginsVertical: Float = 32f,
     val readerPaginationMode: String = "paginated", // paginated | scroll
-    val readerPageTurnAnimation: String = "slide", // none | slide | fade
+    val readerPageTurnAnimation: String = "slide", // none | slide | fade | page_turn
     val readerTheme: String = "light", // light | sepia | dark | black (RD-5)
     val readerBrightness: Float? = null, // null → system (RD-14)
     val readerKeepScreenOn: Boolean = false, // RD-18

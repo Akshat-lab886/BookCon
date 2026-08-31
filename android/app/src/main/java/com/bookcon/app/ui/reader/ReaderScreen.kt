@@ -319,6 +319,7 @@ private fun ReaderContentHost(
                 onJumpTo = { },
                 turnRequest = viewModel.pdfTurnRequest.collectAsStateWithLifecycle().value,
                 onTurnRequestConsumed = { viewModel.consumePdfTurnRequest() },
+                pageAnimation = settings.readerPageTurnAnimation,
                 modifier = Modifier.fillMaxSize(),
             )
 
