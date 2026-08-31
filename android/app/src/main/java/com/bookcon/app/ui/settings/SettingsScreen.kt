@@ -334,7 +334,7 @@ fun SettingsScreen(
                     headlineContent = { Text("About BookCon", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = {
                         Text(
-                            "Version 1.4.1 · Open-source licenses",
+                            "Version 1.4.2 · Open-source licenses",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
