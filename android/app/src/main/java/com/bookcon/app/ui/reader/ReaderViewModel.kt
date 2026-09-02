@@ -571,10 +571,9 @@ class ReaderViewModel @Inject constructor(
         val stroke = PdfInkStroke(
             id = UUID.randomUUID().toString(),
             page = page,
-            color = when (tool) {
-                PdfInkTool.HIGHLIGHTER -> "#FACC15"
-                else -> _state.value.pdfInkColor
-            },
+            // Use the toolbar-selected color for both pen and marker (v1.4.3 fix:
+            // highlighter strokes used to be forced back to yellow on save).
+            color = _state.value.pdfInkColor,
             width = if (mode == "highlighter") HIGHLIGHTER_WIDTH_DP else PEN_WIDTH_DP,
             points = points,
             mode = mode,
@@ -664,11 +663,11 @@ class ReaderViewModel @Inject constructor(
             PdfInkTool.NONE, PdfInkTool.ERASER -> return
             else -> {}
         }
-        val tool = _state.value.pdfInkTool
         val stroke = PdfInkStroke(
             id = UUID.randomUUID().toString(),
             page = -1,
-            color = if (tool == PdfInkTool.HIGHLIGHTER) "#FACC15" else _state.value.pdfInkColor,
+            // v1.4.3 fix: honor the selected color for the marker too.
+            color = _state.value.pdfInkColor,
             width = if (mode == "highlighter") HIGHLIGHTER_WIDTH_DP else PEN_WIDTH_DP,
             points = points,
             mode = mode,
