@@ -17,12 +17,18 @@ import com.bookcon.app.data.local.BookDao
 import com.bookcon.app.data.local.BookEntity
 import com.bookcon.app.data.local.BookmarkDao
 import com.bookcon.app.data.local.BookmarkEntity
+import com.bookcon.app.data.local.NoteDao
+import com.bookcon.app.data.local.NotebookDao
+import com.bookcon.app.data.local.NoteEntity
+import com.bookcon.app.data.local.NotebookEntity
 import com.bookcon.app.data.local.PositionDao
 import com.bookcon.app.data.local.PositionEntity
 import com.bookcon.app.data.sync.enqueueDownload
 import com.bookcon.app.reader.EngineSearchHit
 import com.bookcon.app.reader.EngineSettings
 import com.bookcon.app.reader.Locators
+import com.bookcon.app.reader.NoteContent
+import com.bookcon.app.reader.NoteContentJson
 import com.bookcon.app.reader.PdfBook
 import com.bookcon.app.reader.PdfInkStroke
 import com.bookcon.app.reader.PdfInkTool
@@ -51,6 +57,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -78,6 +85,18 @@ data class SummaryUiState(
     val text: String? = null,
     val error: String? = null,
     val fromCache: Boolean = false,
+)
+
+/** Notebook sheet state (v1.5): one mixed-canvas note per book page. */
+data class NotebookUiState(
+    val open: Boolean = false,
+    val pages: List<Int> = emptyList(),      // 0-based pages that already have notes
+    val activePage: Int = 0,                 // page the open note belongs to
+    val pageLabel: String = "",              // "Page 9" or the EPUB chapter title
+    val content: NoteContent = NoteContent.EMPTY,
+    val tool: PdfInkTool = PdfInkTool.NONE,  // NONE = type mode
+    val color: String = "#FACC15",
+    val saving: Boolean = false,
 )
 
 data class ReaderUiState(
@@ -120,6 +139,8 @@ class ReaderViewModel @Inject constructor(
     private val annotationDao: AnnotationDao,
     private val bookmarkDao: BookmarkDao,
     private val positionDao: PositionDao,
+    private val notebookDao: NotebookDao,
+    private val noteDao: NoteDao,
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
@@ -136,6 +157,12 @@ class ReaderViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(ReaderUiState())
     val state: StateFlow<ReaderUiState> = _state.asStateFlow()
+
+    // Notebook (v1.5): one note per book page, opened by swipe-up or pill button.
+    private val _notebook = MutableStateFlow(NotebookUiState())
+    val notebook: StateFlow<NotebookUiState> = _notebook.asStateFlow()
+    private var notebookNotebookId: String = ""
+    private var notebookSaveJob: Job? = null
 
     // AI page summaries: context-backed collaborators, constructed plainly like the
     // DataStore repository (no DI bindings yet).
@@ -603,6 +630,153 @@ class ReaderViewModel @Inject constructor(
             writePdfStrokes(page, strokes.dropLast(1))
         }
     }
+
+    // ---------------------------------------------------------------- Notebook (v1.5)
+
+    /** Current note anchor: PDF → page index; EPUB → "<href>#<position>". */
+    private fun currentNoteAnchor(): Pair<Int, String> =
+        if (_state.value.pdfBook != null) {
+            val p = pdfCurrentPage.coerceAtLeast(0)
+            p to ""
+        } else {
+            -1 to _state.value.epubAnchor
+        }
+
+    /** Open the notebook sheet for the page being read (auto-creates the notebook). */
+    fun openNotebook() {
+        if (_notebook.value.open) return
+        viewModelScope.launch {
+            val nb = notebookDao.forBook(bookId)
+                ?: NotebookEntity(
+                    id = "nb:$bookId",
+                    bookId = bookId,
+                    createdAt = nowIso(),
+                    updatedAt = nowIso(),
+                ).also { notebookDao.upsert(it) }
+            notebookNotebookId = nb.id
+            val (page, anchor) = currentNoteAnchor()
+            // Pages that already have notes (for the page chips row).
+            val pages = noteDao.observeForNotebook(nb.id).first().map { it.bookPage }.distinct().sorted()
+            val label =
+                if (page >= 0) "Page ${page + 1}"
+                else _state.value.chapterTitle.ifBlank { "Note" }
+            _notebook.value = NotebookUiState(
+                open = true,
+                pages = pages,
+                activePage = page,
+                pageLabel = label,
+                tool = PdfInkTool.NONE,
+                color = _notebook.value.color,
+            )
+            loadNoteForActivePage(nb.id, page, anchor)
+        }
+    }
+
+    /** Switch the sheet to another note page (or create it on demand). */
+    fun openNotebookPage(page: Int) {
+        val nbId = notebookNotebookId
+        if (nbId.isBlank()) return
+        viewModelScope.launch {
+            val anchor = if (page >= 0) "" else _notebook.value.pageLabel
+            _notebook.value = _notebook.value.copy(activePage = page, pageLabel = "Page ${page + 1}")
+            loadNoteForActivePage(nbId, page, anchor)
+        }
+    }
+
+    private suspend fun loadNoteForActivePage(nbId: String, page: Int, anchor: String) {
+        val existing =
+            if (page >= 0) noteDao.forPage(nbId, page)
+            else noteDao.forAnchor(nbId, anchor)
+        val content = existing?.let { NoteContentJson.decode(it.contentJson) } ?: NoteContent.EMPTY
+        _notebook.value = _notebook.value.copy(content = content)
+    }
+
+    fun closeNotebook() {
+        flushNotebookSave()
+        _notebook.value = _notebook.value.copy(open = false)
+    }
+
+    fun setNotebookTool(tool: PdfInkTool) {
+        _notebook.value = _notebook.value.copy(tool = tool)
+    }
+
+    fun setNotebookColor(colorHex: String) {
+        _notebook.value = _notebook.value.copy(color = colorHex)
+    }
+
+    /** Debounced autosave of the open note (called on every content mutation). */
+    fun saveNotebookContent(content: NoteContent) {
+        _notebook.value = _notebook.value.copy(content = content)
+        notebookSaveJob?.cancel()
+        notebookSaveJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(400)
+            persistNote(content)
+        }
+    }
+
+    /** Immediate save (sheet closing, app backgrounding). */
+    private fun flushNotebookSave() {
+        val st = _notebook.value
+        if (!st.open) return
+        notebookSaveJob?.cancel()
+        val content = st.content
+        if (content.isEmpty) return
+        viewModelScope.launch { persistNote(content) }
+    }
+
+    private suspend fun persistNote(content: NoteContent) {
+        val nbId = notebookNotebookId
+        if (nbId.isBlank()) return
+        val (page, anchor) = currentNoteAnchor()
+        val id = "note:$nbId:${if (page >= 0) page.toString() else anchor.hashCode()}"
+        val now = nowIso()
+        val existing = noteDao.forPage(nbId, page)
+            ?: noteDao.forAnchor(nbId, anchor)
+        noteDao.upsert(
+            NoteEntity(
+                id = id,
+                notebookId = nbId,
+                bookId = bookId,
+                bookPage = page,
+                anchorKey = anchor,
+                contentJson = NoteContentJson.encode(content),
+                createdAt = existing?.createdAt ?: now,
+                updatedAt = now,
+            ),
+        )
+        _notebook.value = _notebook.value.copy(saving = false)
+    }
+
+    /** Add a finished ink stroke to the open note (drawn on the sheet canvas). */
+    fun addNotebookStroke(points: List<Float>) {
+        val st = _notebook.value
+        if (points.size < 4) return
+        val mode = when (st.tool) {
+            PdfInkTool.HIGHLIGHTER -> "highlighter"
+            else -> "pen"
+        }
+        val stroke = PdfInkStroke(
+            page = st.activePage,
+            color = st.color,
+            width = if (mode == "highlighter") ReaderViewModel.HIGHLIGHTER_WIDTH_DP else ReaderViewModel.PEN_WIDTH_DP,
+            points = points,
+            mode = mode,
+        )
+        saveNotebookContent(st.content.copy(strokes = st.content.strokes + stroke))
+    }
+
+    fun undoNotebookStroke() {
+        val st = _notebook.value
+        if (st.content.strokes.isEmpty()) return
+        saveNotebookContent(st.content.copy(strokes = st.content.strokes.dropLast(1)))
+    }
+
+    fun eraseNotebookStroke(strokeId: String) {
+        val st = _notebook.value
+        saveNotebookContent(st.content.copy(strokes = st.content.strokes.filterNot { it.id == strokeId }))
+    }
+
+    // ------------------------------------------------------------ end Notebook (v1.5)
 
 
     // ------------------------------------------------------- EPUB ink (INK-4)

@@ -48,6 +48,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TextFields
@@ -324,6 +325,7 @@ private fun ReaderContentHost(
                 onTurnRequestConsumed = { viewModel.consumePdfTurnRequest() },
                 pageAnimation = settings.readerPageTurnAnimation,
                 onTogglePageAnimation = viewModel::togglePageTurnAnimation,
+                onOpenNotebook = viewModel::openNotebook,
                 modifier = Modifier.fillMaxSize(),
             )
 
@@ -524,6 +526,7 @@ private fun ReaderContentHost(
                 onTextSettings = { viewModel.setPanel(ReaderPanel.SETTINGS) },
                 onSummarize = { viewModel.summarizeCurrentPage() },
                 onToggleReadAloud = { viewModel.toggleReadAloud() },
+                onOpenNotebook = viewModel::openNotebook,
                 onClose = onClose,
             )
         }
@@ -573,6 +576,45 @@ private fun ReaderContentHost(
             viewModel = viewModel,
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 170.dp),
         )
+
+        // v1.5 notebook: swipe up from the very bottom edge opens the notebook
+        // sheet. Narrow 36dp strip so page turns and tap zones stay unaffected;
+        // disabled while another panel is up or an ink tool is armed.
+        val notebook by viewModel.notebook.collectAsStateWithLifecycle()
+        val notebookSheetOpen = notebook.open
+        if (state.phase == ReaderPhase.READY &&
+            state.panel == ReaderPanel.NONE &&
+            state.pdfInkTool == PdfInkTool.NONE &&
+            !notebookSheetOpen
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var crossed = false
+                            var up = false
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull() ?: break
+                                if (!change.pressed) {
+                                    up = true
+                                    break
+                                }
+                                if (change.position.y < change.previousPosition.y - 24f) crossed = true
+                                change.consume()
+                            }
+                            if (crossed && up) viewModel.openNotebook()
+                        }
+                    },
+            )
+        }
+
+        // v1.5 notebook sheet — modal over everything.
+        NotebookSheet(viewModel = viewModel)
     } // Box
 }
 
@@ -818,6 +860,7 @@ private fun ReaderBottomBar(
     onTextSettings: () -> Unit,
     onSummarize: () -> Unit,
     onToggleReadAloud: () -> Unit,
+    onOpenNotebook: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -864,6 +907,12 @@ private fun ReaderBottomBar(
                 contentDescription = "Read aloud",
                 onClick = onToggleReadAloud,
                 accent = MaterialTheme.colorScheme.secondary,
+            )
+            ReaderChromeIconButton(
+                icon = Icons.Filled.EditNote,
+                contentDescription = "Notebook",
+                onClick = onOpenNotebook,
+                accent = MaterialTheme.colorScheme.primary,
             )
             ReaderChromeIconButton(
                 icon = Icons.AutoMirrored.Filled.ArrowBack,

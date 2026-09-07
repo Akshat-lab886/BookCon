@@ -235,3 +235,34 @@ interface UploadQueueDao {
     @Query("SELECT COUNT(*) FROM upload_queue WHERE state != :doneState")
     suspend fun pendingCount(doneState: Int = UploadState.DONE): Int
 }
+
+/** Notebook feature (v1.5): one notebook per book, page-anchored mixed-canvas notes. */
+@Dao
+interface NotebookDao {
+    @Query("SELECT * FROM notebooks WHERE deletedAt IS NULL ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<NotebookEntity>>
+
+    @Query("SELECT * FROM notebooks WHERE bookId = :bookId AND deletedAt IS NULL LIMIT 1")
+    suspend fun forBook(bookId: String): NotebookEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(notebook: NotebookEntity)
+}
+
+@Dao
+interface NoteDao {
+    @Query("SELECT * FROM notes WHERE notebookId = :notebookId AND deletedAt IS NULL ORDER BY bookPage ASC")
+    fun observeForNotebook(notebookId: String): Flow<List<NoteEntity>>
+
+    @Query("SELECT * FROM notes WHERE bookId = :bookId AND deletedAt IS NULL ORDER BY bookPage ASC")
+    fun observeForBook(bookId: String): Flow<List<NoteEntity>>
+
+    @Query("SELECT * FROM notes WHERE notebookId = :notebookId AND bookPage = :page AND deletedAt IS NULL LIMIT 1")
+    suspend fun forPage(notebookId: String, page: Int): NoteEntity?
+
+    @Query("SELECT * FROM notes WHERE notebookId = :notebookId AND anchorKey = :anchor AND deletedAt IS NULL LIMIT 1")
+    suspend fun forAnchor(notebookId: String, anchor: String): NoteEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(note: NoteEntity)
+}

@@ -125,6 +125,7 @@ fun LibraryScreen(
     openReader: (String) -> Unit,
     openSettings: () -> Unit,
     openAnnotations: () -> Unit,
+    openNotebooks: () -> Unit = {},
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -178,6 +179,10 @@ fun LibraryScreen(
                                 )
                             }
                             DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Notebooks") },
+                                    onClick = { overflowOpen = false; openNotebooks() },
+                                )
                                 DropdownMenuItem(
                                     text = { Text("All annotations") },
                                     onClick = { overflowOpen = false; openAnnotations() },

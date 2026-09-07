@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Collections
@@ -88,6 +89,7 @@ fun PdfPager(
     onJumpTo: (Int) -> Unit = {},
     pageAnimation: String = "slide",
     onTogglePageAnimation: () -> Unit = {},
+    onOpenNotebook: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -301,6 +303,14 @@ fun PdfPager(
                         Icons.AutoMirrored.Filled.MenuBook,
                         contentDescription = if (pageAnimation == "page_turn") "Animation: page turn" else "Animation: slide",
                         tint = if (pageAnimation == "page_turn") MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                IconButton(onClick = onOpenNotebook, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Filled.EditNote,
+                        contentDescription = "Notebook",
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp),
                     )
                 }

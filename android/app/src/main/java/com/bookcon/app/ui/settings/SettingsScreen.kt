@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Notes
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -84,6 +85,7 @@ fun SettingsScreen(
     openVocab: () -> Unit,
     openStats: () -> Unit,
     openWifiImport: () -> Unit,
+    openNotebooks: () -> Unit = {},
     onSignedOut: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -285,6 +287,20 @@ fun SettingsScreen(
             SettingsSectionHeader("Reading")
             SettingsCard {
                 ListItem(
+                    headlineContent = { Text("Notebooks", style = MaterialTheme.typography.titleMedium) },
+                    supportingContent = {
+                        Text(
+                            "Per-book notes — type or draw on any page",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    },
+                    leadingContent = { AvatarCircle(Icons.AutoMirrored.Outlined.Notes, MaterialTheme.colorScheme.secondaryContainer) },
+                    trailingContent = { Chevron() },
+                    modifier = Modifier.clickable(onClick = openNotebooks),
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                ListItem(
                     headlineContent = { Text("Vocabulary", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = {
                         Text(
@@ -334,7 +350,7 @@ fun SettingsScreen(
                     headlineContent = { Text("About BookCon", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = {
                         Text(
-                            "Version 1.4.3 · Open-source licenses",
+                            "Version 1.5.0 · Open-source licenses",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

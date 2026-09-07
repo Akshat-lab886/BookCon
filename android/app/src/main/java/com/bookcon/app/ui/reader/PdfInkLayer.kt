@@ -211,7 +211,7 @@ private fun DrawScope.drawStroke(stroke: PdfInkStroke) {
     )
 }
 
-private fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
+internal fun distanceToSegment(p: Offset, a: Offset, b: Offset): Float {
     val abx = b.x - a.x
     val aby = b.y - a.y
     val lenSq = abx * abx + aby * aby

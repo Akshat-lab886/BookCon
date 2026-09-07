@@ -21,6 +21,7 @@ object Routes {
     const val VOCAB = "vocab"
     const val STATS = "stats"
     const val WIFI_IMPORT = "import/wifi"
+    const val NOTEBOOKS = "notebooks"
 
     fun details(bookId: String) = "details/$bookId"
     fun reader(bookId: String) = "reader/$bookId"
@@ -55,6 +56,7 @@ fun BookConApp(
                     openReader = { navController.navigate(Routes.reader(it)) },
                     openSettings = { navController.navigate(Routes.SETTINGS) },
                     openAnnotations = { navController.navigate(Routes.ANNOTATIONS) },
+                    openNotebooks = { navController.navigate(Routes.NOTEBOOKS) },
                 )
             }
             composable(Routes.DETAILS) { entry ->
@@ -82,6 +84,7 @@ fun BookConApp(
                     openVocab = { navController.navigate(Routes.VOCAB) },
                     openStats = { navController.navigate(Routes.STATS) },
                     openWifiImport = { navController.navigate(Routes.WIFI_IMPORT) },
+                    openNotebooks = { navController.navigate(Routes.NOTEBOOKS) },
                     onSignedOut = {
                         navController.navigate(Routes.AUTH) {
                             popUpTo(Routes.LIBRARY) { inclusive = true }
@@ -106,6 +109,12 @@ fun BookConApp(
             }
             composable(Routes.WIFI_IMPORT) {
                 com.bookcon.app.ui.importwifi.WifiImportScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.NOTEBOOKS) {
+                com.bookcon.app.ui.notebooks.NotebooksScreen(
+                    onBack = { navController.popBackStack() },
+                    openBook = { navController.navigate(Routes.reader(it)) },
+                )
             }
             composable(Routes.ANNOTATIONS) {
                 com.bookcon.app.ui.annotations.AnnotationsScreen(

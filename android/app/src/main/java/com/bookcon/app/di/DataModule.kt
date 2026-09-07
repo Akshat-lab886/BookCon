@@ -6,6 +6,8 @@ import com.bookcon.app.data.local.AnnotationDao
 import com.bookcon.app.data.local.BookConDatabase
 import com.bookcon.app.data.local.BookDao
 import com.bookcon.app.data.local.BookmarkDao
+import com.bookcon.app.data.local.NoteDao
+import com.bookcon.app.data.local.NotebookDao
 import com.bookcon.app.data.local.OrganizeDao
 import com.bookcon.app.data.local.PositionDao
 import com.bookcon.app.data.local.SyncCursorDao
@@ -25,6 +27,7 @@ object DataModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): BookConDatabase =
         Room.databaseBuilder(context, BookConDatabase::class.java, BookConDatabase.NAME)
+            .addMigrations(BookConDatabase.MIGRATION_1_2)
             .fallbackToDestructiveMigration()
             .build()
 
@@ -35,4 +38,6 @@ object DataModule {
     @Provides fun organizeDao(db: BookConDatabase): OrganizeDao = db.organizeDao()
     @Provides fun syncCursorDao(db: BookConDatabase): SyncCursorDao = db.syncCursorDao()
     @Provides fun uploadQueueDao(db: BookConDatabase): UploadQueueDao = db.uploadQueueDao()
+    @Provides fun notebookDao(db: BookConDatabase): NotebookDao = db.notebookDao()
+    @Provides fun noteDao(db: BookConDatabase): NoteDao = db.noteDao()
 }
