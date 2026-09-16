@@ -32,7 +32,6 @@ import java.time.OffsetDateTime
 import java.util.UUID
 import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
@@ -113,9 +112,8 @@ class LibraryViewModel @Inject constructor(
     private val organizeDao = db.organizeDao()
     private val uploadQueueDao = db.uploadQueueDao()
 
-    /** Debounced search query feeding Room (<200 ms → instant local results, PRD LIB-2). */
+    /** Search query feeding Room immediately (no debounce — PRD LIB-2 <200 ms). */
     private val queryFlow = MutableStateFlow("")
-    private var queryJob: Job? = null
 
     private val _controls = MutableStateFlow(LibraryUiState())
 
@@ -219,11 +217,10 @@ class LibraryViewModel @Inject constructor(
 
     fun setSearchText(value: String) {
         _controls.update { it.copy(searchText = value) }
-        queryJob?.cancel()
-        queryJob = viewModelScope.launch {
-            delay(180) // instant-feel local debounce (PRD LIB-2 <200 ms)
-            queryFlow.value = value
-        }
+        // Room's LIKE is cheap on local storage, so no debounce is needed (PRD LIB-2
+        // calls for instant feedback, <200ms). Updating immediately keeps the results
+        // grid in lockstep with what the user typed.
+        queryFlow.value = value
     }
 
     fun setSort(mode: SortMode) = _controls.update { it.copy(sort = mode) }
@@ -459,6 +456,17 @@ class LibraryViewModel @Inject constructor(
                 )
                 _events.send(LibraryEvent.Snackbar("Shelf saved offline — will sync"))
             }
+        }
+    }
+
+    /** Soft-deletes a shelf locally (offline-first), then best-effort remote delete. */
+    fun deleteShelf(id: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val shelf = organizeDao.shelfById(id) ?: return@launch
+            organizeDao.upsertShelf(shelf.copy(deletedAt = nowIso(), dirty = true))
+            runCatching { apiProvider.get().deleteShelf(id) }
+            if (state.value.filterShelfId == id) setShelfFilter(null)
+            _events.send(LibraryEvent.Snackbar("Shelf deleted"))
         }
     }
 

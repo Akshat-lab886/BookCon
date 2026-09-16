@@ -16,7 +16,7 @@ interface BookDao {
         """
         SELECT * FROM books
         WHERE deletedAt IS NULL
-          AND (:q IS NULL OR title LIKE '%' || :q || '%' OR description LIKE '%' || :q || '%')
+          AND (:q IS NULL OR title LIKE '%' || :q || '%' COLLATE NOCASE OR description LIKE '%' || :q || '%' COLLATE NOCASE)
         ORDER BY
             CASE WHEN :sort = 'title' THEN title END COLLATE NOCASE ASC,
             CASE WHEN :sort = 'recent' THEN updatedAt END DESC,
@@ -174,6 +174,9 @@ interface OrganizeDao {
 
     @Query("SELECT * FROM tags WHERE id = :id LIMIT 1")
     suspend fun tagById(id: String): TagEntity?
+
+    @Query("SELECT * FROM shelves WHERE id = :id LIMIT 1")
+    suspend fun shelfById(id: String): ShelfEntity?
 
     @Query("SELECT * FROM series WHERE id = :id LIMIT 1")
     suspend fun seriesById(id: String): SeriesEntity?

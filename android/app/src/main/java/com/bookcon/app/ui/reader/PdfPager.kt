@@ -3,6 +3,7 @@ package com.bookcon.app.ui.reader
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Collections
 import androidx.compose.material.icons.outlined.Headphones
@@ -32,14 +35,18 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -90,6 +97,8 @@ fun PdfPager(
     pageAnimation: String = "slide",
     onTogglePageAnimation: () -> Unit = {},
     onOpenNotebook: () -> Unit = {},
+    zoomLocked: Boolean = false,
+    onToggleZoomLock: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -98,6 +107,14 @@ fun PdfPager(
     // Render at ~1.5x dp width for crispness, capped so huge pages stay cheap.
     val targetWidth = (LocalConfiguration.current.screenWidthDp * density * 1.5f)
         .toInt().coerceIn(480, 1600)
+
+    // --- pinch-to-zoom state (PDF reader zooms the *page*, not the whole layout) ---
+    var zoom by remember { mutableStateOf(1f) }
+    var panX by remember { mutableStateOf(0f) }
+    var panY by remember { mutableStateOf(0f) }
+    LaunchedEffect(zoomLocked) {
+        if (zoomLocked) { zoom = 1f; panX = 0f; panY = 0f }
+    }
 
     val pagerState = rememberPagerState(
         initialPage = startPage.coerceIn(0, maxOf(0, pdf.pageCount - 1)),
@@ -157,7 +174,25 @@ fun PdfPager(
         AnimatedPager(
             state = pagerState,
             animation = PageAnimation.fromId(pageAnimation),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                // Root-level pinch detector: attach to the pager itself but
+                // only consume scale; page-turn swipes still pass through to
+                // AnimatedPager when scale == 1 (HorizontalPager forwards
+                // unconsumed horizontal drag). This beats putting pointerInput
+                // *inside* each page's Box, which got starved by the pager.
+                .pointerInput(zoomLocked) {
+                    if (zoomLocked) return@pointerInput
+                    detectTransformGestures { _, pan, scale, _ ->
+                        val newScale = (zoom * scale).coerceIn(0.5f, 4f)
+                        if (pan.getDistance() > 0f && newScale > 1.2f) {
+                            panX += pan.x
+                            panY += pan.y
+                        }
+                        zoom = newScale
+                        if (zoom <= 1f) { zoom = 1f; panX = 0f; panY = 0f }
+                    }
+                },
         ) { index ->
             val bmp = pageCache[index]
             Box(
@@ -172,7 +207,14 @@ fun PdfPager(
                         contentDescription = "Page ${index + 1}",
                         contentScale = ContentScale.Fit,
                         colorFilter = nightPageFilter(nightMode),
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = zoom,
+                                scaleY = zoom,
+                                translationX = panX,
+                                translationY = panY,
+                            ),
                     )
                 } else {
                     Column(
@@ -370,6 +412,27 @@ fun PdfPager(
                     .align(Alignment.BottomCenter)
                     .padding(bottom = 24.dp),
             )
+        }
+
+        // Zoom lock toggle — pins scale so pinch doesn't reset mid-gesture.
+        if (inkTool == PdfInkTool.NONE) {
+            FloatingActionButton(
+                onClick = onToggleZoomLock,
+                shape = CircleShape,
+                containerColor = if (zoomLocked) MaterialTheme.colorScheme.secondaryContainer
+                else MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = 28.dp)
+                    .size(52.dp),
+            ) {
+                Icon(
+                    imageVector = if (zoomLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
+                    contentDescription = if (zoomLocked) "Unlock zoom" else "Lock zoom",
+                    tint = if (zoomLocked) MaterialTheme.colorScheme.onSecondaryContainer
+                    else MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
         }
     }
 }

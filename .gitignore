@@ -14,3 +14,14 @@ server/.DS_Store
 .android-sdk/
 .buildhome/
 BookCon-*.apk.idsig
+
+# Gradle caches & local daemon (not source)
+.gradle/
+.kotlin/
+*.class
+*.jar
+*.tmp
+
+# Session scratch
+dsh-session-*
+SESSION_CONTEXT_RECOVERY.md
