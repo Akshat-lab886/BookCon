@@ -187,6 +187,134 @@ class Summarizer {
     private class HttpStatusException(val code: Int, bodySnippet: String) :
         RuntimeException("Server returned HTTP $code: ${bodySnippet.replace('\n', ' ').trim()}")
 
+    // ----------------------------------------------------------- conversation chat
+
+    /**
+     * Converses with an OpenAI-compatible (or Gemini) chat API over a conversation
+     * history. Used by the voice-assistant feature so the model remembers earlier turns
+     * in the session (PRD VOICE-1: "it can be from anywhere").
+     *
+     * [systemPrompt] may differ from page-summarization; [context] is optional
+     * reader/screen context prepended as a user turn.
+     */
+    suspend fun chat(
+        provider: String,
+        baseUrl: String,
+        apiKey: String,
+        model: String,
+        history: List<ChatMessage>,
+        systemPrompt: String = SYSTEM_PROMPT,
+        context: String? = null,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val key = apiKey.trim()
+            val effectiveModel = model.trim().ifBlank { defaultModel(provider) }
+            val messages = buildList {
+                if (!context.isNullOrBlank()) {
+                    add(ChatMessage("user", "Current reading context:\n$context"))
+                }
+                addAll(history)
+            }
+            val text = when (provider.lowercase().trim()) {
+                PROVIDER_GEMINI -> {
+                    val request = buildGeminiChatRequest(key, effectiveModel, messages, systemPrompt)
+                    parseGeminiChat(execute(request))
+                }
+                PROVIDER_GROQ, PROVIDER_CUSTOM, PROVIDER_OPENAI -> {
+                    val base = normalizedBaseUrl(provider, baseUrl)
+                    val request = buildChatRequest(base, key, effectiveModel, messages)
+                    parseOpenAiChat(execute(request))
+                }
+                else -> throw IllegalArgumentException("Unsupported AI provider: $provider")
+            }
+            Result.success(text)
+        } catch (e: HttpStatusException) {
+            Result.failure(e)
+        } catch (e: IllegalArgumentException) {
+            Result.failure(e)
+        } catch (e: IOException) {
+            Result.failure(IOException(NETWORK_ERROR, e))
+        } catch (e: Exception) {
+            Result.failure(Exception("Chat failed: ${e.message ?: e.javaClass.simpleName}", e))
+        }
+    }
+
+    private fun buildChatRequest(
+        base: String, apiKey: String, model: String, messages: List<ChatMessage>
+    ): Request {
+        val arr = JSONArray()
+        for (m in messages) {
+            arr.put(JSONObject().put("role", m.role).put("content", m.content))
+        }
+        val body = JSONObject().apply {
+            put("model", model)
+            put("messages", JSONArray().apply {
+                put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
+                for (m in messages) put(JSONObject().put("role", m.role).put("content", m.content))
+            })
+            put("temperature", 0.7)
+            put("max_tokens", 800)
+        }
+        return Request.Builder()
+            .url("$base/chat/completions")
+            .header("Authorization", "Bearer $apiKey")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+    }
+
+    private fun buildGeminiChatRequest(
+        apiKey: String, model: String, messages: List<ChatMessage>, systemPrompt: String
+    ): Request {
+        val contents = JSONArray()
+        for (m in messages) {
+            if (m.role == "system") continue
+            val parts = JSONArray().put(JSONObject().put("text", m.content))
+            contents.put(JSONObject()
+                .put("role", if (m.role == "assistant") "model" else "user")
+                .put("parts", parts))
+        }
+        val body = JSONObject().apply {
+            put("contents", contents)
+            put("generationConfig", JSONObject().put("temperature", 0.7).put("maxOutputTokens", 800))
+            put("systemInstruction", JSONObject().put("parts",
+                JSONArray().put(JSONObject().put("text", systemPrompt))))
+        }
+        return Request.Builder()
+            .url("$GEMINI_BASE/models/$model:generateContent")
+            .header("x-goog-api-key", apiKey)
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+    }
+
+    private fun parseOpenAiChat(json: String): String =
+        runCatching {
+            JSONObject(json)
+                .getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+                .trim()
+        }.getOrElse {
+            throw IllegalStateException("Unexpected chat response format from the provider")
+        }.ifEmpty { throw IllegalStateException("The model returned an empty reply") }
+
+    private fun parseGeminiChat(json: String): String =
+        runCatching {
+            buildString {
+                val candidates = JSONObject(json).getJSONArray("candidates")
+                for (i in 0 until candidates.length()) {
+                    val parts = candidates.getJSONObject(i)
+                        .getJSONObject("content").getJSONArray("parts")
+                    for (j in 0 until parts.length()) {
+                        val p = parts.getJSONObject(j)
+                        if (!p.isNull("text")) append(p.optString("text"))
+                    }
+                }
+            }.trim()
+        }.getOrElse {
+            throw IllegalStateException("Unexpected chat response format from Gemini")
+        }.ifEmpty { throw IllegalStateException("Gemini returned an empty reply") }
+
     companion object {
         const val PROVIDER_OPENAI = "openai"
         const val PROVIDER_GEMINI = "gemini"

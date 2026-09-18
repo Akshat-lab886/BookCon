@@ -25,3 +25,7 @@ BookCon-*.apk.idsig
 # Session scratch
 dsh-session-*
 SESSION_CONTEXT_RECOVERY.md
+
+# Local Gradle / Android SDK overrides (not part of the build contract)
+.gradle-runtime/
+.android-runtime/

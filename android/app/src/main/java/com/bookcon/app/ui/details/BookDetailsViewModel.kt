@@ -57,6 +57,11 @@ data class BookDetailsUiState(
     val annotationCount: Int = 0,
     val shelves: List<ShelfEntity> = emptyList(),
     val tags: List<TagEntity> = emptyList(),
+
+    /** Oripio-style detail-screen chip: "4.3" / "—" */
+    val ratingLabel: String = "",
+    /** Oripio-style detail-screen chip: "260 Pgs" / "—" */
+    val pagesLabel: String = "—",
 )
 
 sealed interface DetailsEvent {
@@ -117,6 +122,8 @@ class BookDetailsViewModel @Inject constructor(
             annotationCount = core.third,
             shelves = shelves,
             tags = tags,
+            ratingLabel = "—",
+            pagesLabel = core.first?.pageCount?.let { "$it Pgs" } ?: "—",
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), BookDetailsUiState())
 

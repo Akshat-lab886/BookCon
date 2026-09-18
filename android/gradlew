@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Custom shim that invokes the cached Gradle 9.3.1 directly.
+# Created because the wrapper jar/gradle-wrapper.properties are not in git,
+# and Kotlin 2.1.0 + AGP 8.7.3 need Gradle 8.9+ — we use 9.3.1.
+exec "/Users/akshatpratap/.gradle/wrapper/dists/gradle-9.3.1-all/9ot9r568e8zfvvd4mn8rbu1j0/gradle-9.3.1/bin/gradle" "$@"

@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bookcon.app.core.AiKeyStore
 import com.bookcon.app.core.ReadAloudController
+import com.bookcon.app.core.VoiceAssistant
 import com.bookcon.app.core.AppSettings
 import com.bookcon.app.core.SettingsRepository
 import com.bookcon.app.core.Summarizer
@@ -169,6 +170,11 @@ class ReaderViewModel @Inject constructor(
     private val aiKeyStore by lazy { AiKeyStore(appContext) }
     private val summaryCache by lazy { SummaryCache(appContext) }
     private val summarizer = Summarizer()
+
+    /** Voice conversation assistant (PRD VOICE-1) — shared singleton across the reader. */
+    val voiceAssistant: VoiceAssistant by lazy {
+        VoiceAssistant(appContext, settingsRepository, aiKeyStore, summarizer)
+    }
 
     private var summaryJob: Job? = null
 

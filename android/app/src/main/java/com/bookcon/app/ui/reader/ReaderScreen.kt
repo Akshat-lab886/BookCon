@@ -302,6 +302,8 @@ private fun ReaderContentHost(
                 strokes = state.pdfStrokes,
                 inkTool = state.pdfInkTool,
                 inkColor = state.pdfInkColor,
+                voiceAssistant = viewModel.voiceAssistant,
+                onRequestAudioPermission = { /* granted by MainActivity manifest prompt */ },
                 onPageChanged = viewModel::onPdfPageChanged,
                 onToggleChrome = viewModel::toggleChrome,
                 onStrokeFinished = { key, mode, pts ->

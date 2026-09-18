@@ -3,6 +3,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Voice assistant: record user speech for STT (PRD VOICE-1). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Voice assistant: capture screen to build page context. -->
+    <uses-permission android:name="android.permission.CAPTURE_VIDEO_OUTPUT" />
 
     <application
         android:name=".BookConApplication"

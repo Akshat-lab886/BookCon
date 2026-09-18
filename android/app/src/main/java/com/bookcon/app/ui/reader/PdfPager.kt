@@ -34,6 +34,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -77,6 +78,8 @@ fun PdfPager(
     strokes: Map<Int, List<PdfInkStroke>>,
     inkTool: PdfInkTool,
     inkColor: String,
+    voiceAssistant: com.bookcon.app.core.VoiceAssistant? = null,
+    onRequestAudioPermission: () -> Unit = {},
     onPageChanged: (Int) -> Unit,
     onToggleChrome: () -> Unit,
     onStrokeFinished: (anchorKey: String, mode: String, points: List<Float>) -> Unit,
@@ -145,6 +148,18 @@ fun PdfPager(
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
             .collect { page -> onPageChanged(page) }
+    }
+
+    // PRD VOICE-1: feed the assistant the current page text so it can "see" the screen.
+    // The pageContext getter is invoked by VoiceAssistant inside its own IO dispatcher,
+    // so the lambda body must stay synchronous (no withContext here).
+    DisposableEffect(voiceAssistant) {
+        voiceAssistant?.pageContext = {
+            pdf.currentPageText(pagerState.currentPage)?.second?.take(8_000)
+        }
+        onDispose {
+            if (voiceAssistant?.pageContext != null) voiceAssistant!!.pageContext = { null }
+        }
     }
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
@@ -431,6 +446,20 @@ fun PdfPager(
                     contentDescription = if (zoomLocked) "Unlock zoom" else "Lock zoom",
                     tint = if (zoomLocked) MaterialTheme.colorScheme.onSecondaryContainer
                     else MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
+
+        // Voice conversation button (PRD VOICE-1) — available from anywhere, even when
+        // not reading a book. Placed at BottomStart so it never overlaps the zoom FAB.
+        if (inkTool == PdfInkTool.NONE) {
+            voiceAssistant?.let { va ->
+                VoiceModeButton(
+                    assistant = va,
+                    onRequestAudioPermission = onRequestAudioPermission,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 20.dp, bottom = 28.dp),
                 )
             }
         }

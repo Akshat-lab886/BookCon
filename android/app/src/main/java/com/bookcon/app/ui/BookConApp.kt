@@ -22,10 +22,14 @@ object Routes {
     const val STATS = "stats"
     const val WIFI_IMPORT = "import/wifi"
     const val NOTEBOOKS = "notebooks"
+    const val WELCOME = "welcome"
+    const val LIFESTYLE_HOME = "lifestyle"
+    const val LIFESTYLE_DETAILS = "lifestyle/details/{bookId}"
 
     fun details(bookId: String) = "details/$bookId"
     fun reader(bookId: String) = "reader/$bookId"
     fun bookAnnotations(bookId: String) = "annotations/$bookId"
+    fun lifestyleDetails(bookId: String) = "lifestyle/details/$bookId"
 }
 
 @Composable
@@ -49,10 +53,38 @@ fun BookConApp(
                 )
             }
         }
-        else -> NavHost(navController, startDestination = Routes.LIBRARY) {
+        else -> NavHost(navController, startDestination = Routes.LIFESTYLE_HOME) {
+            // Oripio-style home is the new default landing page (v2.2 design).
+            composable(Routes.LIFESTYLE_HOME) {
+                com.bookcon.app.ui.lifestyle.LifestyleHomeScreen(
+                    onOpenBook = { navController.navigate(Routes.lifestyleDetails(it)) },
+                    onOpenReader = { navController.navigate(Routes.reader(it)) },
+                    onOpenLibrary = { navController.navigate(Routes.LIBRARY) },
+                    onOpenSearch = { navController.navigate(Routes.LIBRARY) },
+                    onOpenStats = { navController.navigate(Routes.STATS) },
+                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                )
+            }
+            composable(Routes.LIFESTYLE_DETAILS) { entry ->
+                val bookId = requireNotNull(entry.arguments?.getString("bookId"))
+                com.bookcon.app.ui.lifestyle.LifestyleBookDetailScreen(
+                    bookId = bookId,
+                    onBack = { navController.popBackStack() },
+                    onContinueReading = { navController.navigate(Routes.reader(bookId)) },
+                )
+            }
+            composable(Routes.WELCOME) {
+                com.bookcon.app.ui.lifestyle.LifestyleWelcomeScreen(
+                    onGetStarted = {
+                        navController.navigate(Routes.LIFESTYLE_HOME) {
+                            popUpTo(Routes.WELCOME) { inclusive = true }
+                        }
+                    },
+                )
+            }
             composable(Routes.LIBRARY) {
                 com.bookcon.app.ui.library.LibraryScreen(
-                    openDetails = { navController.navigate(Routes.details(it)) },
+                    openDetails = { navController.navigate(Routes.lifestyleDetails(it)) },
                     openReader = { navController.navigate(Routes.reader(it)) },
                     openSettings = { navController.navigate(Routes.SETTINGS) },
                     openAnnotations = { navController.navigate(Routes.ANNOTATIONS) },

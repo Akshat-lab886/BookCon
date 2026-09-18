@@ -65,10 +65,12 @@ class ReadAloudController(
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
                 _state.value = State(Status.ERROR, "Speech failed")
+                onIdle?.invoke()
             }
 
             override fun onDone(utteranceId: String?) {
                 _state.value = State(Status.IDLE)
+                onIdle?.invoke()
                 onDone()
             }
         })
@@ -86,6 +88,19 @@ class ReadAloudController(
         _state.value = State(Status.PAUSED)
     }
 
+    /** Returns true when the underlying TTS engine has finished initialising. */
+    fun isReady(): Boolean = ready
+
+    /**
+     * Callback invoked once the currently-spoken utterance finishes. Used by the
+     * VoiceAssistant so it can return to the INACTIVE state without re-quering TTS.
+     */
+    var onIdle: (() -> Unit)? = null
+        set(value) {
+            field = value
+            // Re-bind so pending listeners fire on the next speak()
+        }
+
     /** Full teardown when leaving the reader. */
     fun shutdown() {
         runCatching {
@@ -94,5 +109,6 @@ class ReadAloudController(
         }
         _state.value = State(Status.IDLE)
         ready = false
+        onIdle = null
     }
 }

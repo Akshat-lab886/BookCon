@@ -6,29 +6,33 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 
 /**
- * BookCon v1.3 design tokens.
+ * BookCon v2.2 design tokens (Oripio-style three-accent palette).
  *
- * Two-accent palette inspired by friendly bookstore UI references:
- *   brand/primary    → cobalt blue (header bars, active icons)
- *   brand/secondary  → warm orange (CTAs, promos)
+ * Inspired by the Oripio bookstore Dribbble shot — friendly, soft, bookstore-y.
+ *   brand/primary    → teal (header bars, hero, primary actions)
+ *   brand/secondary  → soft pink (cards, secondary surfaces, accents)
+ *   brand/tertiary   → warm yellow (badges, chips, highlights)
  *
- * Surfaces are flat, near-white in light and near-black in dark; depth
- * comes from hairline borders, not shadows.
+ * Surfaces are flat and near-white in light / near-black in dark; depth
+ * comes from hairline borders + soft pill shadows.
  */
 object BrandColors {
     // Brand
-    val Primary = Color(0xFF2F66F4)
-    val PrimaryContainer = Color(0xFFE8EFFF)
-    val OnPrimaryContainer = Color(0xFF0F2A6E)
-    val Secondary = Color(0xFFFF6B35)
-    val SecondaryContainer = Color(0xFFFFE2D2)
-    val OnSecondaryContainer = Color(0xFF6E2A06)
+    val Primary = Color(0xFF1FB8A8)         // teal
+    val PrimaryContainer = Color(0xFFD6F4F0) // teal-tinted card bg
+    val OnPrimaryContainer = Color(0xFF064E45)
+    val Secondary = Color(0xFFEFA8C4)        // soft pink
+    val SecondaryContainer = Color(0xFFFCE4EE)
+    val OnSecondaryContainer = Color(0xFF6E1F44)
+    val Tertiary = Color(0xFFFFC857)         // warm yellow
+    val TertiaryContainer = Color(0xFFFFF1D1)
+    val OnTertiaryContainer = Color(0xFF6E4A00)
 
     // Neutral / surface
     val Page = Color(0xFFFFFFFF)
     val Card = Color(0xFFFFFFFF)
-    val Muted = Color(0xFFF4F6FA)
-    val Divider = Color(0xFFEAECF1)
+    val Muted = Color(0xFFF6F7F9)
+    val Divider = Color(0xFFEBEDF0)
 
     val TextPrimary = Color(0xFF0F1623)
     val TextSecondary = Color(0xFF5A6478)
@@ -38,12 +42,15 @@ object BrandColors {
     val Error = Color(0xFFDC2626)
 
     // Dark
-    val PrimaryDark = Color(0xFF5B8DFF)
-    val PrimaryContainerDark = Color(0xFF1B2A55)
-    val OnPrimaryContainerDark = Color(0xFFBFD0FF)
-    val SecondaryDark = Color(0xFFFF8A5C)
-    val SecondaryContainerDark = Color(0xFF552711)
-    val OnSecondaryContainerDark = Color(0xFFFFCFB8)
+    val PrimaryDark = Color(0xFF1FB8A8)
+    val PrimaryContainerDark = Color(0xFF093B36)
+    val OnPrimaryContainerDark = Color(0xFF8EE9DC)
+    val SecondaryDark = Color(0xFFEFA8C4)
+    val SecondaryContainerDark = Color(0xFF551935)
+    val OnSecondaryContainerDark = Color(0xFFFAD2E2)
+    val TertiaryDark = Color(0xFFFFC857)
+    val TertiaryContainerDark = Color(0xFF553E10)
+    val OnTertiaryContainerDark = Color(0xFFFFE6B0)
     val PageDark = Color(0xFF0F1115)
     val CardDark = Color(0xFF1A1D24)
     val MutedDark = Color(0xFF161A22)
@@ -58,9 +65,13 @@ private val LightColors: ColorScheme = lightColorScheme(
     primaryContainer = BrandColors.PrimaryContainer,
     onPrimaryContainer = BrandColors.OnPrimaryContainer,
     secondary = BrandColors.Secondary,
-    onSecondary = Color.White,
+    onSecondary = Color(0xFF492035),
     secondaryContainer = BrandColors.SecondaryContainer,
     onSecondaryContainer = BrandColors.OnSecondaryContainer,
+    tertiary = BrandColors.Tertiary,
+    onTertiary = Color(0xFF402A00),
+    tertiaryContainer = BrandColors.TertiaryContainer,
+    onTertiaryContainer = BrandColors.OnTertiaryContainer,
     background = BrandColors.Muted,
     onBackground = BrandColors.TextPrimary,
     surface = BrandColors.Page,
@@ -75,13 +86,17 @@ private val LightColors: ColorScheme = lightColorScheme(
 
 private val DarkColors: ColorScheme = darkColorScheme(
     primary = BrandColors.PrimaryDark,
-    onPrimary = Color(0xFF0E1A3A),
+    onPrimary = Color(0xFF002923),
     primaryContainer = BrandColors.PrimaryContainerDark,
     onPrimaryContainer = BrandColors.OnPrimaryContainerDark,
     secondary = BrandColors.SecondaryDark,
-    onSecondary = Color(0xFF3B1707),
+    onSecondary = Color(0xFF492035),
     secondaryContainer = BrandColors.SecondaryContainerDark,
     onSecondaryContainer = BrandColors.OnSecondaryContainerDark,
+    tertiary = BrandColors.TertiaryDark,
+    onTertiary = Color(0xFF402A00),
+    tertiaryContainer = BrandColors.TertiaryContainerDark,
+    onTertiaryContainer = BrandColors.OnTertiaryContainerDark,
     background = BrandColors.PageDark,
     onBackground = BrandColors.TextPrimaryDark,
     surface = BrandColors.CardDark,
