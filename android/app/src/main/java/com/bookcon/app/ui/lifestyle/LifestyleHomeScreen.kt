@@ -20,12 +20,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Whatshot
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -45,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,47 +56,50 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bookcon.app.data.local.BookEntity
-import com.bookcon.app.ui.components.BookCard
+import com.bookcon.app.ui.components.BookCover
 import com.bookcon.app.ui.components.SearchField
-import com.bookcon.app.ui.components.SectionHeader
 import com.bookcon.app.ui.library.LibraryViewModel
-import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
- * Oripio-inspired home screen (PRD VOICE-2 design v2.2).
+ * Oripio-inspired home screen (PRD v2.2 + user reference screenshot).
  *
  * Layout (top → bottom):
- *  1. Soft teal/cream hero with "Hello, [name]" + big greeting + search bar
- *  2. Featured card (latest book, full-bleed) — mirrors the Oripio banner
- *  3. Categories (Health / Science / Motivation) — chips with icons
- *  4. Recently added — horizontal book carousel
- *  5. Top authors — horizontal avatars
- *  6. Bottom nav: Home / Library / Search / Stats
- *
- * The screen piggy-backs on the existing [LibraryViewModel] so it can read
- * the same data source as the Library tab without re-querying.
+ *  1. Full-bleed teal hero: avatar circle (top right), search field,
+ *     "Your Book Library / Make Your Own Space" headline, "N books ready to read" subtitle,
+ *     black "Import books" pill button
+ *  2. Rounded teal CTA card: "Find the next book you'll love" + "Add a book now" pill
+ *     + pink circular book icon on the right
+ *  3. "Categories" header + 3 pill chips (Health / Science / Motivation)
+ *  4. "Recently added" header + "View all" link + horizontal book carousel
+ *     (wider cards: cover image + title + filename source row)
+ *  5. "Continue reading" header (visible at top of scroll)
+ *  6. Bottom nav: Home / Books / Bookmarks / Profile
  */
 @Composable
 fun LifestyleHomeScreen(
     onOpenBook: (String) -> Unit,
     onOpenReader: (String) -> Unit,
     onOpenLibrary: () -> Unit,
-    onOpenSearch: () -> Unit,
-    onOpenStats: () -> Unit,
+    onOpenBookmarks: () -> Unit,
+    onOpenProfile: () -> Unit,
     onOpenSettings: () -> Unit,
+    onImport: () -> Unit,
+    onAddBook: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val greeting = rememberGreeting()
+
+    val bookCount = state.books.size
+    val booksDisplay = state.books.takeLast(8).reversed()
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = { LifestyleBottomNav(
             current = LifestyleTab.HOME,
             onHome = { /* already here */ },
-            onLibrary = onOpenLibrary,
-            onSearch = onOpenSearch,
-            onStats = onOpenStats,
+            onBooks = onOpenLibrary,
+            onBookmarks = onOpenBookmarks,
+            onProfile = onOpenProfile,
         ) },
     ) { padding ->
         LazyColumn(
@@ -101,132 +108,117 @@ fun LifestyleHomeScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
-            // Hero header
-            item { LifestyleHero(greeting = greeting) }
-
-            // Featured carousel (Oripio's "Find the best book of you interest" hero)
-            item { FeaturedBookCard(
-                book = state.continueReading.firstOrNull() ?: state.books.firstOrNull(),
-                serverUrl = state.serverUrl,
-                onClick = { book -> book?.let { onOpenReader(it.id) } },
+            // 1. Teal hero
+            item { TealHero(
+                bookCount = bookCount,
+                onImport = onImport,
             ) }
 
-            // Categories
-            item {
-                CategoriesRow(
-                    onHealth = { onOpenSearch() },
-                    onScience = { onOpenSearch() },
-                    onMotivation = { onOpenSearch() },
-                )
-            }
+            // 2. Rounded teal "find the next book" CTA
+            item { FindNextBookCta(onAddBook = onAddBook) }
 
-            // Recently added
-            item {
-                SectionHeader(
-                    title = "Recently added",
-                    actionLabel = "View all",
-                    onAction = onOpenLibrary,
-                )
-                RecentlyAddedRow(
-                    books = state.books.takeLast(10).reversed(),
-                    serverUrl = state.serverUrl,
-                    onClick = onOpenBook,
-                )
-            }
+            // 3. Categories
+            item { CategoriesHeader() }
+            item { CategoriesRow() }
 
-            // Top authors
-            item {
-                SectionHeader(
-                    title = "Top authors",
-                    actionLabel = "View all",
-                    onAction = onOpenLibrary,
-                )
-                TopAuthorsRow(authors = state.authors.take(10))
-            }
+            // 4. Recently added
+            item { RecentlyAddedHeader() }
+            item { RecentlyAddedRow(
+                books = booksDisplay,
+                serverUrl = state.serverUrl,
+                onClick = onOpenBook,
+            ) }
 
-            // Tiny footer with voice-assistant hint
-            item {
-                VoiceHintCard(
-                    onClick = onOpenSettings,
-                    modifier = Modifier.padding(16.dp),
-                )
-            }
+            // 5. Continue reading (visible at bottom of fold)
+            item { ContinueReadingHeader() }
         }
     }
 }
 
+// ---- 1. Teal hero ----
 @Composable
-private fun rememberGreeting(): String {
-    val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-    return when {
-        hour < 5 -> "Late night"
-        hour < 12 -> "Good morning"
-        hour < 17 -> "Good afternoon"
-        hour < 21 -> "Good evening"
-        else -> "Good night"
-    }
-}
-
-@Composable
-private fun LifestyleHero(greeting: String) {
+private fun TealHero(bookCount: Int, onImport: () -> Unit) {
+    val teal = MaterialTheme.colorScheme.primary
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(start = 20.dp, end = 20.dp, top = 28.dp, bottom = 8.dp),
+            .background(teal)
+            .padding(horizontal = 20.dp)
+            .padding(top = 12.dp, bottom = 32.dp),
     ) {
+        // Top: search field with avatar circle on right
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "BookCon",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+            var search by rememberSaveable { mutableStateOf("") }
+            SearchField(
+                value = search,
+                onValueChange = { search = it },
+                placeholder = "Search your books",
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(12.dp))
             Box(
-                Modifier
-                    .size(8.dp)
+                modifier = Modifier
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-            )
+                    .background(MaterialTheme.colorScheme.secondary),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "B",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
         }
+        Spacer(Modifier.height(28.dp))
+        Text(
+            "Your Book Library",
+            color = Color.White,
+            fontSize = 32.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            "Make Your Own Space",
+            color = Color.White,
+            fontSize = 32.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
         Spacer(Modifier.height(8.dp))
         Text(
-            greeting,
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-        Text(
-            "Your book library — make your own space.",
+            "$bookCount books ready to read",
+            color = Color.White.copy(alpha = 0.85f),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(16.dp))
-        var search by rememberSaveable { mutableStateOf("") }
-        SearchField(
-            value = search,
-            onValueChange = { search = it },
-            placeholder = "Search your item",
-        )
+        Spacer(Modifier.height(24.dp))
+        Button(
+            onClick = onImport,
+            shape = RoundedCornerShape(50),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.Black,
+                contentColor = Color.White,
+            ),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
+        ) {
+            Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Import books", fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 
+// ---- 2. Rounded teal "Find the next book" CTA ----
 @Composable
-private fun FeaturedBookCard(
-    book: BookEntity?,
-    serverUrl: String,
-    onClick: (BookEntity?) -> Unit,
-) {
+private fun FindNextBookCta(onAddBook: () -> Unit) {
+    val teal = MaterialTheme.colorScheme.primary
+    val pink = MaterialTheme.colorScheme.secondary
     Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.primary,
-        contentColor = MaterialTheme.colorScheme.onPrimary,
-        tonalElevation = 4.dp,
-        shadowElevation = 4.dp,
+        shape = RoundedCornerShape(20.dp),
+        color = teal,
+        contentColor = Color.White,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 16.dp)
-            .clickable { onClick(book) },
+            .padding(16.dp),
     ) {
         Row(
             modifier = Modifier
@@ -236,72 +228,71 @@ private fun FeaturedBookCard(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    "Find the best\nbook for you",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
+                    "Find the next",
                     color = Color.White,
-                    lineHeight = 30.sp,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
-                Spacer(Modifier.height(10.dp))
+                Text(
+                    "book you'll love",
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(14.dp))
                 Button(
-                    onClick = { onClick(book) },
+                    onClick = onAddBook,
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color.White,
-                        contentColor = MaterialTheme.colorScheme.primary,
+                        contentColor = teal,
                     ),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
                 ) {
-                    Text(
-                        if (book != null) "Open" else "Browse",
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    Text("Add a book now", fontWeight = FontWeight.SemiBold)
                 }
             }
-            // The right-side circle previews the cover
             Box(
                 modifier = Modifier
                     .size(72.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.tertiary),
+                    .background(pink),
                 contentAlignment = Alignment.Center,
             ) {
-                if (book != null) {
-                    com.bookcon.app.ui.components.BookCover(
-                        coverUrl = book.coverUrl,
-                        title = book.title,
-                        serverUrl = serverUrl,
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(CircleShape),
-                        cornerRadius = 60.dp,
-                    )
-                } else {
-                    Icon(
-                        Icons.Filled.LibraryBooks,
-                        contentDescription = null,
-                        tint = Color.White,
-                    )
-                }
+                Icon(
+                    Icons.AutoMirrored.Filled.LibraryBooks,
+                    contentDescription = null,
+                    tint = Color.Black.copy(alpha = 0.7f),
+                    modifier = Modifier.size(36.dp),
+                )
             }
         }
     }
 }
 
+// ---- 3. Categories ----
 @Composable
-private fun CategoriesRow(
-    onHealth: () -> Unit,
-    onScience: () -> Unit,
-    onMotivation: () -> Unit,
-) {
+private fun CategoriesHeader() {
+    Text(
+        "Categories",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp),
+    )
+}
+
+@Composable
+private fun CategoriesRow() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        CategoryChip("Health", Icons.Filled.Favorite, MaterialTheme.colorScheme.secondaryContainer, onClick = onHealth)
-        CategoryChip("Science", Icons.Filled.Whatshot, MaterialTheme.colorScheme.tertiaryContainer, onClick = onScience)
-        CategoryChip("Motivation", Icons.Filled.Home, MaterialTheme.colorScheme.primaryContainer, onClick = onMotivation)
+        CategoryChip("Health", Icons.Filled.Favorite, MaterialTheme.colorScheme.tertiary, onClick = {})
+        CategoryChip("Science", Icons.Filled.Science, MaterialTheme.colorScheme.primary, onClick = {})
+        CategoryChip("Motivation", Icons.Filled.LocalFireDepartment, MaterialTheme.colorScheme.error, onClick = {})
     }
 }
 
@@ -309,22 +300,48 @@ private fun CategoriesRow(
 private fun CategoryChip(
     label: String,
     icon: ImageVector,
-    container: Color,
+    iconTint: Color,
     onClick: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(50),
-        color = container,
+        color = MaterialTheme.colorScheme.surface,
+        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
         modifier = Modifier.clickable { onClick() },
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
         ) {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onBackground)
+            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onBackground)
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
         }
+    }
+}
+
+// ---- 4. Recently added ----
+@Composable
+private fun RecentlyAddedHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Recently added",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+        )
+        Text(
+            "View all",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.tertiary,
+            modifier = Modifier.clickable { },
+        )
     }
 }
 
@@ -337,148 +354,131 @@ private fun RecentlyAddedRow(
     LazyRow(
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth().height(220.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(260.dp),
     ) {
         items(books, key = { it.id }) { book ->
-            BookCard(
-                title = book.title,
-                coverUrl = book.coverUrl,
+            RecentlyAddedCard(
+                book = book,
                 serverUrl = serverUrl,
-                format = book.format,
-                subtitle = book.authors.firstOrNull(),
-                modifier = Modifier
-                    .width(130.dp)
-                    .clickable { onClick(book.id) },
+                onClick = { onClick(book.id) },
             )
         }
     }
 }
 
 @Composable
-private fun TopAuthorsRow(authors: List<String>) {
-    if (authors.isEmpty()) {
+private fun RecentlyAddedCard(
+    book: BookEntity,
+    serverUrl: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(150.dp)
+            .clickable { onClick() },
+    ) {
+        BookCover(
+            coverUrl = book.coverUrl,
+            title = book.title,
+            serverUrl = serverUrl,
+            cornerRadius = 8.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(200.dp),
+        )
+        Spacer(Modifier.height(6.dp))
         Text(
-            "No authors yet — import a book to get started.",
+            book.title.ifBlank { "Untitled" },
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val subtitle = listOfNotNull(
+            book.publisher.takeUnless { it.isNullOrBlank() },
+            book.authors.firstOrNull(),
+        ).firstOrNull() ?: book.format
+        Text(
+            subtitle,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
-        return
-    }
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-    ) {
-        items(authors) { name ->
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    modifier = Modifier
-                        .size(60.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        name.firstOrNull()?.uppercase() ?: "?",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    name.substringBefore(' ').take(12),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
     }
 }
 
+// ---- 5. Continue reading ----
 @Composable
-private fun VoiceHintCard(onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-        modifier = modifier.fillMaxWidth().clickable { onClick() },
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                Icons.Filled.Search,
-                contentDescription = null,
-                modifier = Modifier.size(28.dp),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Talk to BookCon",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    "Set your AI key in Settings to use voice mode.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-    }
+private fun ContinueReadingHeader() {
+    Text(
+        "Continue reading",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.padding(start = 16.dp, top = 28.dp, bottom = 12.dp),
+    )
 }
 
-enum class LifestyleTab { HOME, LIBRARY, SEARCH, STATS }
+// ---- bottom nav ----
+enum class LifestyleTab { HOME, BOOKS, BOOKMARKS, PROFILE }
 
 @Composable
 private fun LifestyleBottomNav(
     current: LifestyleTab,
     onHome: () -> Unit,
-    onLibrary: () -> Unit,
-    onSearch: () -> Unit,
-    onStats: () -> Unit,
+    onBooks: () -> Unit,
+    onBookmarks: () -> Unit,
+    onProfile: () -> Unit,
 ) {
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp,
+        tonalElevation = 4.dp,
     ) {
         NavigationBarItem(
             selected = current == LifestyleTab.HOME,
             onClick = onHome,
             icon = { Icon(Icons.Filled.Home, contentDescription = "Home") },
+            label = { Text("Home") },
             colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 indicatorColor = MaterialTheme.colorScheme.primaryContainer,
             ),
         )
         NavigationBarItem(
-            selected = current == LifestyleTab.LIBRARY,
-            onClick = onLibrary,
-            icon = { Icon(Icons.Filled.LibraryBooks, contentDescription = "Library") },
+            selected = current == LifestyleTab.BOOKS,
+            onClick = onBooks,
+            icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = "Books") },
+            label = { Text("Books") },
             colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 indicatorColor = MaterialTheme.colorScheme.primaryContainer,
             ),
         )
         NavigationBarItem(
-            selected = current == LifestyleTab.SEARCH,
-            onClick = onSearch,
-            icon = { Icon(Icons.Filled.Search, contentDescription = "Search") },
+            selected = current == LifestyleTab.BOOKMARKS,
+            onClick = onBookmarks,
+            icon = { Icon(Icons.Filled.Bookmark, contentDescription = "Bookmarks") },
+            label = { Text("Bookmarks") },
             colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 indicatorColor = MaterialTheme.colorScheme.primaryContainer,
             ),
         )
         NavigationBarItem(
-            selected = current == LifestyleTab.STATS,
-            onClick = onStats,
-            icon = { Icon(Icons.Filled.Person, contentDescription = "Stats") },
+            selected = current == LifestyleTab.PROFILE,
+            onClick = onProfile,
+            icon = { Icon(Icons.Filled.Person, contentDescription = "Profile") },
+            label = { Text("Profile") },
             colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.primary,
+                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 indicatorColor = MaterialTheme.colorScheme.primaryContainer,
             ),
         )

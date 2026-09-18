@@ -60,9 +60,11 @@ fun BookConApp(
                     onOpenBook = { navController.navigate(Routes.lifestyleDetails(it)) },
                     onOpenReader = { navController.navigate(Routes.reader(it)) },
                     onOpenLibrary = { navController.navigate(Routes.LIBRARY) },
-                    onOpenSearch = { navController.navigate(Routes.LIBRARY) },
-                    onOpenStats = { navController.navigate(Routes.STATS) },
+                    onOpenBookmarks = { navController.navigate(Routes.ANNOTATIONS) },
+                    onOpenProfile = { navController.navigate(Routes.SETTINGS) },
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    onImport = { navController.navigate(Routes.WIFI_IMPORT) },
+                    onAddBook = { navController.navigate(Routes.WIFI_IMPORT) },
                 )
             }
             composable(Routes.LIFESTYLE_DETAILS) { entry ->
