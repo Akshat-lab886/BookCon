@@ -28,11 +28,11 @@ object BrandColors {
     val TertiaryContainer = Color(0xFFFFF1D1)
     val OnTertiaryContainer = Color(0xFF6E4A00)
 
-    // Neutral / surface
-    val Page = Color(0xFFFFFFFF)
+    // Neutral / surface — cream/warm-white background (matches Oripio reference)
+    val Page = Color(0xFFF8F4EE)
     val Card = Color(0xFFFFFFFF)
-    val Muted = Color(0xFFF6F7F9)
-    val Divider = Color(0xFFEBEDF0)
+    val Muted = Color(0xFFF8F4EE)
+    val Divider = Color(0xFFE6E1D8)
 
     val TextPrimary = Color(0xFF0F1623)
     val TextSecondary = Color(0xFF5A6478)

@@ -1,5 +1,7 @@
 package com.bookcon.app.ui.lifestyle
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,15 +29,11 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -47,8 +45,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,19 +63,19 @@ import com.bookcon.app.ui.components.SearchField
 import com.bookcon.app.ui.library.LibraryViewModel
 
 /**
- * Oripio-inspired home screen (PRD v2.2 + user reference screenshot).
+ * Oripio-inspired home screen — exact match to the reference screenshot.
  *
  * Layout (top → bottom):
- *  1. Full-bleed teal hero: avatar circle (top right), search field,
- *     "Your Book Library / Make Your Own Space" headline, "N books ready to read" subtitle,
+ *  1. Soft teal gradient hero with decorative dots and a chevron, avatar "B"
+ *     on the top right, search field, "Your Book Library / Make Your Own
+ *     Space" headline (serif), "N books ready to read" subtitle, and a
  *     black "Import books" pill button
- *  2. Rounded teal CTA card: "Find the next book you'll love" + "Add a book now" pill
- *     + pink circular book icon on the right
- *  3. "Categories" header + 3 pill chips (Health / Science / Motivation)
- *  4. "Recently added" header + "View all" link + horizontal book carousel
- *     (wider cards: cover image + title + filename source row)
- *  5. "Continue reading" header (visible at top of scroll)
- *  6. Bottom nav: Home / Books / Bookmarks / Profile
+ *  2. Rounded teal CTA card: "Find the next book you'll love" + "Add a book
+ *     now" pill + pink circular book icon
+ *  3. "Categories" (serif) + 3 pill chips (Health / Science / Motivation)
+ *  4. "Recently added" (serif) + "View all" link + horizontal book carousel
+ *  5. "Continue reading" header
+ *  6. Floating bottom nav card: Home / Books / Bookmarks / Profile
  */
 @Composable
 fun LifestyleHomeScreen(
@@ -94,13 +96,15 @@ fun LifestyleHomeScreen(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        bottomBar = { LifestyleBottomNav(
-            current = LifestyleTab.HOME,
-            onHome = { /* already here */ },
-            onBooks = onOpenLibrary,
-            onBookmarks = onOpenBookmarks,
-            onProfile = onOpenProfile,
-        ) },
+        bottomBar = {
+            LifestyleBottomNavCard(
+                current = LifestyleTab.HOME,
+                onHome = { },
+                onBooks = onOpenLibrary,
+                onBookmarks = onOpenBookmarks,
+                onProfile = onOpenProfile,
+            )
+        },
     ) { padding ->
         LazyColumn(
             modifier = Modifier
@@ -108,11 +112,8 @@ fun LifestyleHomeScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = 24.dp),
         ) {
-            // 1. Teal hero
-            item { TealHero(
-                bookCount = bookCount,
-                onImport = onImport,
-            ) }
+            // 1. Soft teal gradient hero
+            item { TealHero(bookCount = bookCount, onImport = onImport) }
 
             // 2. Rounded teal "find the next book" CTA
             item { FindNextBookCta(onAddBook = onAddBook) }
@@ -123,13 +124,15 @@ fun LifestyleHomeScreen(
 
             // 4. Recently added
             item { RecentlyAddedHeader() }
-            item { RecentlyAddedRow(
-                books = booksDisplay,
-                serverUrl = state.serverUrl,
-                onClick = onOpenBook,
-            ) }
+            item {
+                RecentlyAddedRow(
+                    books = booksDisplay,
+                    serverUrl = state.serverUrl,
+                    onClick = onOpenBook,
+                )
+            }
 
-            // 5. Continue reading (visible at bottom of fold)
+            // 5. Continue reading
             item { ContinueReadingHeader() }
         }
     }
@@ -139,86 +142,128 @@ fun LifestyleHomeScreen(
 @Composable
 private fun TealHero(bookCount: Int, onImport: () -> Unit) {
     val teal = MaterialTheme.colorScheme.primary
-    Column(
+    val tealLight = Color(0xFF4FCDBE)
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(teal)
-            .padding(horizontal = 20.dp)
-            .padding(top = 12.dp, bottom = 32.dp),
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(teal, tealLight),
+                )
+            ),
     ) {
-        // Top: search field with avatar circle on right
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            var search by rememberSaveable { mutableStateOf("") }
-            SearchField(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = "Search your books",
-                modifier = Modifier.weight(1f),
+        // Decorative dots and chevron
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+            val dot = Color.White.copy(alpha = 0.5f)
+            drawCircle(dot, radius = 4f, center = Offset(w * 0.18f, h * 0.06f))
+            drawCircle(dot, radius = 5f, center = Offset(w * 0.10f, h * 0.30f))
+            drawCircle(dot, radius = 6f, center = Offset(w * 0.78f, h * 0.32f))
+            val chevronColor = Color.White.copy(alpha = 0.45f)
+            val cx = w * 0.78f
+            val cy = h * 0.36f
+            val path = Path().apply {
+                moveTo(cx - 30, cy)
+                lineTo(cx, cy - 25)
+                lineTo(cx + 30, cy)
+                lineTo(cx, cy + 25)
+                close()
+            }
+            drawPath(path, chevronColor)
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(top = 12.dp, bottom = 36.dp),
+        ) {
+            // Top: search field with avatar circle on right
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                var search by rememberSaveable { mutableStateOf("") }
+                SearchField(
+                    value = search,
+                    onValueChange = { search = it },
+                    placeholder = "Search your books",
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFFF3B4C9)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "B",
+                        color = Color(0xFF6E1F44),
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
+            Spacer(Modifier.height(36.dp))
+            Text(
+                "Your Book Library",
+                color = Color.White,
+                fontFamily = FontFamily.Serif,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 32.sp,
+                lineHeight = 38.sp,
             )
-            Spacer(Modifier.width(12.dp))
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.secondary),
-                contentAlignment = Alignment.Center,
+            Text(
+                "Make Your Own Space",
+                color = Color.White,
+                fontFamily = FontFamily.Serif,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 32.sp,
+                lineHeight = 38.sp,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "$bookCount books ready to read",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 14.sp,
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = onImport,
+                shape = RoundedCornerShape(50),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.Black,
+                    contentColor = Color.White,
+                ),
+                contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp),
             ) {
+                Icon(
+                    Icons.Filled.UploadFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(10.dp))
                 Text(
-                    "B",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleMedium,
+                    "Import books",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
                 )
             }
-        }
-        Spacer(Modifier.height(28.dp))
-        Text(
-            "Your Book Library",
-            color = Color.White,
-            fontSize = 32.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Text(
-            "Make Your Own Space",
-            color = Color.White,
-            fontSize = 32.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "$bookCount books ready to read",
-            color = Color.White.copy(alpha = 0.85f),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Spacer(Modifier.height(24.dp))
-        Button(
-            onClick = onImport,
-            shape = RoundedCornerShape(50),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = Color.Black,
-                contentColor = Color.White,
-            ),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-        ) {
-            Icon(Icons.Filled.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Import books", fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
-// ---- 2. Rounded teal "Find the next book" CTA ----
+// ---- 2. Rounded teal CTA ----
 @Composable
 private fun FindNextBookCta(onAddBook: () -> Unit) {
     val teal = MaterialTheme.colorScheme.primary
     val pink = MaterialTheme.colorScheme.secondary
     Surface(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(22.dp),
         color = teal,
         contentColor = Color.White,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Row(
             modifier = Modifier
@@ -230,16 +275,20 @@ private fun FindNextBookCta(onAddBook: () -> Unit) {
                 Text(
                     "Find the next",
                     color = Color.White,
-                    fontSize = 22.sp,
+                    fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.SemiBold,
+                    fontSize = 22.sp,
+                    lineHeight = 28.sp,
                 )
                 Text(
                     "book you'll love",
                     color = Color.White,
-                    fontSize = 22.sp,
+                    fontFamily = FontFamily.Serif,
                     fontWeight = FontWeight.SemiBold,
+                    fontSize = 22.sp,
+                    lineHeight = 28.sp,
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(16.dp))
                 Button(
                     onClick = onAddBook,
                     shape = RoundedCornerShape(50),
@@ -247,14 +296,18 @@ private fun FindNextBookCta(onAddBook: () -> Unit) {
                         containerColor = Color.White,
                         contentColor = teal,
                     ),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 10.dp),
                 ) {
-                    Text("Add a book now", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Add a book now",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                    )
                 }
             }
             Box(
                 modifier = Modifier
-                    .size(72.dp)
+                    .size(76.dp)
                     .clip(CircleShape)
                     .background(pink),
                 contentAlignment = Alignment.Center,
@@ -262,8 +315,8 @@ private fun FindNextBookCta(onAddBook: () -> Unit) {
                 Icon(
                     Icons.AutoMirrored.Filled.LibraryBooks,
                     contentDescription = null,
-                    tint = Color.Black.copy(alpha = 0.7f),
-                    modifier = Modifier.size(36.dp),
+                    tint = Color(0xFF6E1F44),
+                    modifier = Modifier.size(38.dp),
                 )
             }
         }
@@ -276,8 +329,10 @@ private fun CategoriesHeader() {
     Text(
         "Categories",
         style = MaterialTheme.typography.headlineSmall,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onBackground,
+        fontSize = 20.sp,
         modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 12.dp),
     )
 }
@@ -290,9 +345,9 @@ private fun CategoriesRow() {
             .padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        CategoryChip("Health", Icons.Filled.Favorite, MaterialTheme.colorScheme.tertiary, onClick = {})
-        CategoryChip("Science", Icons.Filled.Science, MaterialTheme.colorScheme.primary, onClick = {})
-        CategoryChip("Motivation", Icons.Filled.LocalFireDepartment, MaterialTheme.colorScheme.error, onClick = {})
+        CategoryChip("Health", Icons.Filled.Favorite, Color(0xFFFFC857))
+        CategoryChip("Science", Icons.Filled.Science, Color(0xFF1FB8A8))
+        CategoryChip("Motivation", Icons.Filled.LocalFireDepartment, Color(0xFFDC2626))
     }
 }
 
@@ -301,13 +356,12 @@ private fun CategoryChip(
     label: String,
     icon: ImageVector,
     iconTint: Color,
-    onClick: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)),
-        modifier = Modifier.clickable { onClick() },
+        color = Color.White,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.clickable { },
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -315,7 +369,13 @@ private fun CategoryChip(
         ) {
             Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
         }
     }
 }
@@ -333,13 +393,17 @@ private fun RecentlyAddedHeader() {
         Text(
             "Recently added",
             style = MaterialTheme.typography.headlineSmall,
+            fontFamily = FontFamily.Serif,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground,
+            fontSize = 20.sp,
         )
         Text(
             "View all",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.tertiary,
+            color = MaterialTheme.colorScheme.primary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.clickable { },
         )
     }
@@ -356,7 +420,7 @@ private fun RecentlyAddedRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .height(260.dp),
+            .height(280.dp),
     ) {
         items(books, key = { it.id }) { book ->
             RecentlyAddedCard(
@@ -392,8 +456,10 @@ private fun RecentlyAddedCard(
         Text(
             book.title.ifBlank { "Untitled" },
             style = MaterialTheme.typography.titleSmall,
+            fontFamily = FontFamily.Serif,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onBackground,
+            fontSize = 14.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -405,6 +471,7 @@ private fun RecentlyAddedCard(
             subtitle,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -417,70 +484,106 @@ private fun ContinueReadingHeader() {
     Text(
         "Continue reading",
         style = MaterialTheme.typography.headlineSmall,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onBackground,
+        fontSize = 20.sp,
         modifier = Modifier.padding(start = 16.dp, top = 28.dp, bottom = 12.dp),
     )
 }
 
-// ---- bottom nav ----
+// ---- bottom nav: floating card ----
 enum class LifestyleTab { HOME, BOOKS, BOOKMARKS, PROFILE }
 
 @Composable
-private fun LifestyleBottomNav(
+private fun LifestyleBottomNavCard(
     current: LifestyleTab,
     onHome: () -> Unit,
     onBooks: () -> Unit,
     onBookmarks: () -> Unit,
     onProfile: () -> Unit,
 ) {
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 4.dp,
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        NavigationBarItem(
-            selected = current == LifestyleTab.HOME,
-            onClick = onHome,
-            icon = { Icon(Icons.Filled.Home, contentDescription = "Home") },
-            label = { Text("Home") },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
-        )
-        NavigationBarItem(
-            selected = current == LifestyleTab.BOOKS,
-            onClick = onBooks,
-            icon = { Icon(Icons.AutoMirrored.Filled.LibraryBooks, contentDescription = "Books") },
-            label = { Text("Books") },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
-        )
-        NavigationBarItem(
-            selected = current == LifestyleTab.BOOKMARKS,
-            onClick = onBookmarks,
-            icon = { Icon(Icons.Filled.Bookmark, contentDescription = "Bookmarks") },
-            label = { Text("Bookmarks") },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
-        )
-        NavigationBarItem(
-            selected = current == LifestyleTab.PROFILE,
-            onClick = onProfile,
-            icon = { Icon(Icons.Filled.Person, contentDescription = "Profile") },
-            label = { Text("Profile") },
-            colors = NavigationBarItemDefaults.colors(
-                selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-            ),
-        )
+        Surface(
+            shape = RoundedCornerShape(40.dp),
+            color = Color.White,
+            shadowElevation = 6.dp,
+            tonalElevation = 2.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NavItem(
+                    selected = current == LifestyleTab.HOME,
+                    icon = Icons.Filled.Home,
+                    label = "Home",
+                    onClick = onHome,
+                    modifier = Modifier.weight(1f),
+                )
+                NavItem(
+                    selected = current == LifestyleTab.BOOKS,
+                    icon = Icons.AutoMirrored.Filled.LibraryBooks,
+                    label = "Books",
+                    onClick = onBooks,
+                    modifier = Modifier.weight(1f),
+                )
+                NavItem(
+                    selected = current == LifestyleTab.BOOKMARKS,
+                    icon = Icons.Filled.Bookmark,
+                    label = "Bookmarks",
+                    onClick = onBookmarks,
+                    modifier = Modifier.weight(1f),
+                )
+                NavItem(
+                    selected = current == LifestyleTab.PROFILE,
+                    icon = Icons.Filled.Person,
+                    label = "Profile",
+                    onClick = onProfile,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NavItem(
+    selected: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val tint = if (selected) Color(0xFF1FB8A8) else Color(0xFF5A6478)
+    val bg = if (selected) Color(0xFFB6EDE4) else Color.Transparent
+    Box(
+        modifier = modifier
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(bg)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+            if (selected) {
+                Spacer(Modifier.width(6.dp))
+                Text(label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            }
+        }
     }
 }

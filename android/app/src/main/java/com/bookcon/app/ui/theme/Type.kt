@@ -2,34 +2,46 @@ package com.bookcon.app.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.bookcon.app.R
 
 /**
- * BookCon v1.3 typography scale.
+ * BookCon v2.2 typography scale (Oripio redesign).
  *
- * Re-tuned Material 3 defaults for a friendly bookstore feel:
- * tighter line-height on headings, slightly heavier weights, generous
- * letter-spacing on labels. Uses the platform default sans-serif; swap
- * in Inter here later if you ship a font asset.
+ * Display family: Georgia (bundled TTF) — a high-contrast serif used for the
+ * "Your Book Library / Make Your Own Space" hero and section headers
+ * ("Categories", "Recently added", "Continue reading").
+ *
+ * Body family: system sans-serif — used for book titles, chip labels, subtitle
+ * rows, and the bottom nav. The reference Oripio design pairs a serif display
+ * with a clean sans-serif body.
  */
-private val Display = FontFamily.SansSerif
+private val Display = FontFamily(
+    Font(R.font.georgia, FontWeight.Normal, FontStyle.Normal),
+    Font(R.font.georgia_bold, FontWeight.Bold, FontStyle.Normal),
+    Font(R.font.georgia_italic, FontWeight.Normal, FontStyle.Italic),
+)
 private val Body = FontFamily.SansSerif
 
 val BookConTypography: Typography = Typography(
+    // Display family — used for the hero "Your Book Library" headline.
     displayLarge = TextStyle(
         fontFamily = Display, fontWeight = FontWeight.Bold,
-        fontSize = 32.sp, lineHeight = 38.sp, letterSpacing = (-0.5).sp,
+        fontSize = 34.sp, lineHeight = 40.sp, letterSpacing = (-0.5).sp,
     ),
     displayMedium = TextStyle(
         fontFamily = Display, fontWeight = FontWeight.Bold,
-        fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = (-0.4).sp,
+        fontSize = 30.sp, lineHeight = 36.sp, letterSpacing = (-0.4).sp,
     ),
     displaySmall = TextStyle(
         fontFamily = Display, fontWeight = FontWeight.Bold,
-        fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.3).sp,
+        fontSize = 26.sp, lineHeight = 32.sp, letterSpacing = (-0.3).sp,
     ),
+    // Section headers (Categories, Recently added) — serif, bold
     headlineLarge = TextStyle(
         fontFamily = Display, fontWeight = FontWeight.Bold,
         fontSize = 22.sp, lineHeight = 28.sp,
@@ -42,13 +54,14 @@ val BookConTypography: Typography = Typography(
         fontFamily = Display, fontWeight = FontWeight.SemiBold,
         fontSize = 18.sp, lineHeight = 24.sp,
     ),
+    // Book titles + chip labels (sans-serif)
     titleLarge = TextStyle(
         fontFamily = Body, fontWeight = FontWeight.SemiBold,
-        fontSize = 17.sp, lineHeight = 22.sp,
+        fontSize = 16.sp, lineHeight = 20.sp,
     ),
     titleMedium = TextStyle(
         fontFamily = Body, fontWeight = FontWeight.SemiBold,
-        fontSize = 15.sp, lineHeight = 20.sp,
+        fontSize = 14.sp, lineHeight = 18.sp,
     ),
     titleSmall = TextStyle(
         fontFamily = Body, fontWeight = FontWeight.Medium,
