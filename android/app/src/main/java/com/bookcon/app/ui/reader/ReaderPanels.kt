@@ -56,6 +56,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -94,6 +95,10 @@ internal fun ReaderPanelsHost(
     onDismissTapZoneEditor: () -> Unit,
     onEditTapZones: () -> Unit,
 ) {
+    // Collected, not read as a value: the undo affordance has to appear the moment
+    // a bookmark is swiped away, and a plain getter evaluated during composition
+    // would not cause a recomposition when it changed.
+    val undoable by viewModel.undoableBookmarkDelete.collectAsStateWithLifecycle()
     when (state.panel) {
         ReaderPanel.BOOKMARKS -> {
             ModalBottomSheet(
@@ -107,6 +112,8 @@ internal fun ReaderPanelsHost(
                         viewModel.closePanel()
                     },
                     onDelete = viewModel::deleteBookmark,
+                    canUndo = undoable != null,
+                    onUndo = viewModel::undoLastBookmarkDelete,
                 )
             }
         }
@@ -338,6 +345,8 @@ internal fun BookmarksSheetContent(
     bookmarks: List<BookmarkEntity>,
     onTap: (BookmarkEntity) -> Unit,
     onDelete: (String) -> Unit,
+    canUndo: Boolean = false,
+    onUndo: () -> Unit = {},
 ) {
     Column(Modifier.padding(bottom = 24.dp)) {
         Text(
@@ -352,6 +361,20 @@ internal fun BookmarksSheetContent(
                 modifier = Modifier.padding(16.dp),
             )
         } else {
+            if (canUndo) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                ) {
+                    Text(
+                        "Bookmark removed",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onUndo) { Text("Undo") }
+                }
+            }
+
             LazyColumn {
             items(bookmarks, key = { it.id }) { item ->
                 val dismissState = rememberSwipeToDismissBoxState(
@@ -529,22 +552,17 @@ private fun TextTab(settings: AppSettings, viewModel: ReaderViewModel) {
 
 @Composable
 private fun LayoutTab(settings: AppSettings, viewModel: ReaderViewModel) {
-    // RD-7 margins.
+    // RD-7 page margins. One slider, because EpubPreferences 3.1.0 exposes exactly
+    // one numeric margin (pageMargins, a percentage of the column). The pair of
+    // dp sliders that used to sit here both computed values that no preference ever
+    // read, so neither of them did anything.
     SettingSlider(
-        label = "Horizontal margins",
+        label = "Page margins",
         initial = settings.readerMarginsHorizontal,
         range = 0f..64f,
         steps = 15,
         format = { "%.0fdp".format(it) },
     ) { viewModel.setMargins(horizontal = it) }
-
-    SettingSlider(
-        label = "Vertical margins",
-        initial = settings.readerMarginsVertical,
-        range = 0f..96f,
-        steps = 11,
-        format = { "%.0fdp".format(it) },
-    ) { viewModel.setMargins(vertical = it) }
 
     // RD-2 scroll vs paginated.
     Text("Layout mode", style = MaterialTheme.typography.titleSmall)
@@ -647,6 +665,71 @@ private fun SystemTab(
         label = "Volume keys turn pages",
         checked = settings.volumeKeyTurns,
     ) { viewModel.setVolumeKeyTurns(it) }
+
+    // ------------------------------------------------------------------ narration
+    // The speed and voice settings existed in the repository and were persisted, but
+    // nothing ever read them back onto the TTS engine, so speech was permanently at
+    // 100% and the chosen voice was ignored. They are reachable now.
+    Text("Read aloud", style = MaterialTheme.typography.titleSmall)
+    var ttsRate by remember(settings.ttsRate) { mutableFloatStateOf(settings.ttsRate.toFloat()) }
+    SettingSlider(
+        label = "Speaking speed",
+        initial = ttsRate,
+        range = 50f..300f,
+        steps = 24,
+        format = { "%.0f%%".format(it) },
+    ) {
+        ttsRate = it
+        viewModel.setTtsRate(it.toInt())
+    }
+
+    // Observed, not remembered: the engine reports readiness after this panel's
+    // composition is already live, and a cached read held whatever it saw at open.
+    val voices by viewModel.ttsVoices.collectAsStateWithLifecycle()
+    if (voices.isNotEmpty()) {
+        Spacer(Modifier.height(8.dp))
+        Text("Voice", style = MaterialTheme.typography.titleSmall)
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.verticalScroll(rememberScrollState()),
+        ) {
+            FilterChip(
+                selected = settings.ttsVoiceName.isBlank(),
+                onClick = { viewModel.setTtsVoice("") },
+                label = { Text("Default") },
+            )
+            voices.take(8).forEach { (name, locale) ->
+                FilterChip(
+                    selected = settings.ttsVoiceName == name,
+                    onClick = { viewModel.setTtsVoice(name) },
+                    label = {
+                        Text(
+                            if (locale.isBlank()) name.substringAfterLast('-')
+                            else "${name.substringAfterLast('-')} ($locale)",
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ PDF comfort
+    // PdfWarmVeil existed but PdfPager was never given a warmth value, so the amber
+    // tint always rendered at zero alpha. This slider is what finally moves it.
+    if (viewModel.currentFormatIsPdf) {
+        Spacer(Modifier.height(8.dp))
+        var warmth by remember(settings.pdfWarmth) { mutableFloatStateOf(settings.pdfWarmth.toFloat()) }
+        SettingSlider(
+            label = "Warm screen tint",
+            initial = warmth,
+            range = 0f..100f,
+            steps = 19,
+            format = { if (it <= 0.5f) "Off" else "%.0f%%".format(it) },
+        ) {
+            warmth = it
+            viewModel.setPdfWarmth(it.toInt())
+        }
+    }
 
     // RD-8 tap zone editor entry point.
     OutlinedButton(onClick = onEditTapZones) {

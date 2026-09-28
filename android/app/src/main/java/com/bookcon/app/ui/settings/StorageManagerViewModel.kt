@@ -59,8 +59,6 @@ class StorageManagerViewModel @Inject constructor(
     private val bookmarkDao = db.bookmarkDao()
 
     /** Pending SAF target for the export the user just confirmed. */
-    var pendingExportUri: Uri? = null
-    var pendingImportUri: Uri? = null
 
     private val _state = MutableStateFlow(StorageUiState())
     val state: StateFlow<StorageUiState> = _state
@@ -99,11 +97,34 @@ class StorageManagerViewModel @Inject constructor(
         }
     }
 
-    /** Per-book remove-offline: deletes the local file and clears download state. */
+    /**
+     * Per-book remove-offline: deletes the local file and clears download state.
+     *
+     * The delete result is now checked. It used to be `runCatching { File(path).delete() }`
+     * with the Boolean discarded, and the database row was cleared regardless — so a
+     * failed delete (file open elsewhere, storage error) made the book vanish from the
+     * Storage list while the file still occupied space, with no way to find or reclaim
+     * it and no message that anything went wrong.
+     */
     fun removeOffline(bookId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val book = bookDao.get(bookId) ?: return@launch
-            book.localFile?.let { path -> runCatching { File(path).delete() } }
+            var failed = false
+            book.localFile?.let { path ->
+                val f = File(path)
+                val gone = !f.exists() || runCatching { f.delete() }.getOrDefault(false)
+                if (!gone) failed = true
+            }
+            if (failed) {
+                _events.send(
+                    StorageEvent.Message(
+                        "Couldn't delete “${book.title}” — the file is still on this device",
+                    ),
+                )
+                // Leave the row intact so the book stays visible in Storage and the
+                // file can be retried.
+                return@launch
+            }
             bookDao.upsert(
                 book.copy(localFile = null, pinnedOffline = false, downloadState = DownloadState.NONE),
             )
@@ -116,12 +137,25 @@ class StorageManagerViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val dir = File(appContext.filesDir, "imports")
             var freed = 0L
+            var failed = 0
             dir.listFiles()?.forEach { f ->
-                freed += f.length()
-                runCatching { f.delete() }
+                val size = f.length()
+                if (runCatching { f.delete() }.getOrDefault(false)) {
+                    freed += size
+                } else {
+                    failed += 1
+                }
             }
-            _state.update { it.copy(importsBytes = 0) }
-            _events.send(StorageEvent.Message("Cleared ${humanize(freed)} of import staging"))
+            // Recompute rather than hard-setting 0: some files may have survived.
+            val remaining = importsDirBytes()
+            _state.update { it.copy(importsBytes = remaining) }
+            _events.send(
+                StorageEvent.Message(
+                    if (failed == 0) "Cleared ${humanize(freed)} of import staging"
+                    else "Cleared ${humanize(freed)}; $failed file${if (failed == 1) "" else "s"} " +
+                        "could not be deleted (${humanize(remaining)} still in use)",
+                ),
+            )
         }
     }
 
@@ -156,16 +190,26 @@ class StorageManagerViewModel @Inject constructor(
                 val stats = out.use {
                     DataArchive.export(appContext, settings, books, positions, annotations, bookmarks, it)
                 }
-                _events.send(
-                    StorageEvent.Message(
-                        "Saved ${stats.books} books · ${StorageManagerViewModel.humanize(stats.bytes)} — import this file on any device",
-                    ),
-                )
+                // stats.books counts every row handed to the export; stats.files is
+                // how many actually had local bytes to put in the archive. Reporting
+                // the former claimed a complete backup when cloud-only books were
+                // silently left out of it.
+                val skipped = stats.books - stats.files
+                val summary = buildString {
+                    append("Saved ${stats.files} book file${if (stats.files == 1) "" else "s"} · ${StorageManagerViewModel.humanize(stats.bytes)} — import this file on any device")
+                    if (skipped > 0) {
+                        append(" — $skipped not downloaded here, so not included")
+                    }
+                }
+                _events.send(StorageEvent.Message(summary))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // See the import path: a catch-all here would report a spurious
+                // failure for a scope the user simply left.
+                throw e
             } catch (t: Throwable) {
                 _events.send(StorageEvent.Message("Export failed: ${t.message ?: t.javaClass.simpleName}"))
             } finally {
                 _state.update { it.copy(vaultBusy = false) }
-                pendingExportUri = null
             }
         }
     }
@@ -200,16 +244,26 @@ class StorageManagerViewModel @Inject constructor(
                 val stats = DataArchive.import(appContext, input, currentSettings, { s ->
                     settingsRepo.update { _ -> s }
                 }, sink)
-                _events.send(
-                    StorageEvent.Message(
-                        "Imported ${stats.books} books · ${stats.annotations} highlights · reading positions restored",
-                    ),
-                )
+                // A book whose payload never arrived lands in the library with no
+                // file and cannot be opened. Reporting a bare "Imported 12 books"
+                // hides that until the user taps one and gets a confusing error, so
+                // the partial result is stated up front.
+                val summary = buildString {
+                    append("Imported ${stats.books} books · ${stats.annotations} highlights · reading positions restored")
+                    if (stats.booksMissingFile > 0) {
+                        append(" — ${stats.booksMissingFile} arrived without a file and need downloading again")
+                    }
+                }
+                _events.send(StorageEvent.Message(summary))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // CancellationException IS a Throwable, so the catch-all below would
+                // swallow it and report "Import failed" for a scope the user simply
+                // navigated away from, then keep writing from a dead coroutine.
+                throw e
             } catch (t: Throwable) {
                 _events.send(StorageEvent.Message("Import failed: ${t.message ?: t.javaClass.simpleName}"))
             } finally {
                 _state.update { it.copy(vaultBusy = false) }
-                pendingImportUri = null
             }
         }
     }

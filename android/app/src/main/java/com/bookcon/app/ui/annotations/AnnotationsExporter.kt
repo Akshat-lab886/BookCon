@@ -2,6 +2,7 @@ package com.bookcon.app.ui.annotations
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.bookcon.app.data.local.AnnotationEntity
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -128,17 +129,29 @@ object AnnotationsExporter {
         Format.TXT -> plainText(entries)
     }
 
-    /** ACTION_SEND share sheet (text/plain). */
-    fun shareText(context: Context, subject: String, text: String) {
-        runCatching {
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, subject)
-                putExtra(Intent.EXTRA_TEXT, text)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(Intent.createChooser(intent, "Share annotations"))
+    /**
+     * ACTION_SEND share sheet (text/plain).
+     *
+     * Returns false instead of swallowing the failure. This used to be a bare
+     * `runCatching { ... }` with no result, and the caller unconditionally showed
+     * "Exported as CSV" — so if no app could handle the intent, the user was told
+     * their highlights were exported while nothing had left the phone.
+     */
+    fun shareText(context: Context, subject: String, text: String): Boolean = runCatching {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, subject)
+            putExtra(Intent.EXTRA_TEXT, text)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        // createChooser always resolves, but startActivity still throws when the
+        // device has no activity for the target, and can throw on other launch errors.
+        if (intent.resolveActivity(context.packageManager) == null) return@runCatching false
+        context.startActivity(Intent.createChooser(intent, "Share annotations"))
+        true
+    }.getOrElse { cause ->
+        Log.w("AnnotationsExporter", "Share failed", cause)
+        false
     }
 
     // --- locator helpers -------------------------------------------------------------
@@ -164,6 +177,25 @@ object AnnotationsExporter {
         sb.appendLine()
     }
 
-    private fun escapeCsv(value: String): String =
-        "\"" + value.replace("\"", "\"\"").replace("\n", "\\n") + "\""
+    /**
+     * Quotes a CSV cell, and neutralises formula injection.
+     *
+     * A highlight beginning with `=`, `+`, `-`, `@`, tab or CR is executed as a
+     * formula when the file is opened in Excel/Sheets/Sheets-compatible tools, which
+     * is exactly what this export is for. Prefixing an apostrophe forces Excel to
+     * treat the rest as text.
+     */
+    internal fun escapeCsv(value: String): String {
+        val guarded = if (value.isNotEmpty() && FORMULA_STARTERS.any { value.startsWith(it) }) {
+            "'$value"
+        } else {
+            value
+        }
+        // \r is normalised away so a bare CR cannot split one row into two for
+        // parsers that treat it as a line break in its own right.
+        val flattened = guarded.replace("\r\n", "\n").replace("\r", "\n")
+        return "\"" + flattened.replace("\"", "\"\"").replace("\n", "\\n") + "\""
+    }
+
+    private val FORMULA_STARTERS = charArrayOf('=', '+', '-', '@', '\t', '\r')
 }

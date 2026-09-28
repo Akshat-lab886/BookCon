@@ -71,7 +71,13 @@ class UploadWorker @AssistedInject constructor(
             }
             try {
                 processItem(dao, item)
-            } catch (_: Exception) {
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // CancellationException IS an Exception, so a bare catch-all would
+                // swallow it: WorkManager stopping this worker would turn into a retry,
+                // and the coroutine would keep writing to the database from a dead
+                // scope. Rethrow so structured concurrency still works.
+                throw e
+                } catch (_: Exception) {
                 failed = true
                 dao.update(item.copy(attempts = item.attempts + 1, state = UploadState.FAILED))
             }
@@ -141,14 +147,30 @@ class UploadWorker @AssistedInject constructor(
         if (local.exists() && local.length() > 0) return local
         local.parentFile?.mkdirs()
         val uri = android.net.Uri.parse(item.pendingUri)
-        appContext.contentResolver.openInputStream(uri)?.use { input ->
-            local.outputStream().use { output -> input.copyTo(output) }
-        } ?: error("Cannot reopen $uri")
+        val input = appContext.contentResolver.openInputStream(uri) ?: error("Cannot reopen $uri")
+        // Staged atomically, so the file at `local` only ever exists complete.
+        //
+        // The catch-and-delete below handled the copy failing, but not the copy
+        // being *killed*: the process can be torn down mid-stream, in which case
+        // nothing runs the delete and a truncated file is left sitting at `local`.
+        // The next run then takes the `exists() && length > 0` fast path and
+        // uploads the TRUNCATED bytes — while sha256 is still the digest of the
+        // original file, so the server stores a permanently incomplete book that
+        // no retry can repair. Writing to a sibling `.part` and renaming means an
+        // interrupted run leaves nothing that the fast path will mistake for done.
+        input.use { stream ->
+            stageFileAtomically(local) { output -> stream.copyTo(output) }
+        }
         return local
     }
 
     private suspend fun markDone(dao: com.bookcon.app.data.local.UploadQueueDao, item: UploadQueueItem) {
         dao.update(item.copy(state = UploadState.DONE))
+        // The book now matches the server, so release it. `dirty` has no other path
+        // to 0 for a book — the sync push layer does not carry books — and while it
+        // stayed set, BookDao.applyPulled permanently skipped that id, so the book
+        // never received any further server updates.
+        item.bookId?.let { db.bookDao().clearDirty(listOf(it)) }
     }
 
     /** Optimistic insert from complete-upload response (or minimal placeholder). */
@@ -181,6 +203,35 @@ class UploadWorker @AssistedInject constructor(
 
 private fun okhttpOkClient(): okhttp3.OkHttpClient = okhttp3.OkHttpClient.Builder().build()
 
+/**
+ * Writes to [target] via a `.part` sidecar, renaming only once the write is whole.
+ *
+ * The point is what a *failed* write leaves behind: nothing. Writing straight to
+ * [target] truncates it, so a download cut short by a dropped connection, a stopped
+ * worker or a killed process replaced a good file with a half-written one under the
+ * name the database still points at — present, non-empty, and unopenable, with no
+ * retry able to repair it.
+ *
+ * [write] is given the output stream to fill; whatever it throws, the original
+ * [target] is left exactly as it was.
+ */
+internal fun stageFileAtomically(target: File, write: (java.io.OutputStream) -> Unit): File {
+    target.parentFile?.mkdirs()
+    val partial = File(target.parentFile, "${target.name}.part")
+    try {
+        partial.outputStream().use(write)
+        if (!partial.renameTo(target)) {
+            // renameTo can fail across filesystems; a copy still beats truncation.
+            partial.copyTo(target, overwrite = true)
+            partial.delete()
+        }
+    } finally {
+        // A stray .part is never content and must not be mistaken for it.
+        runCatching { partial.delete() }
+    }
+    return target
+}
+
 @HiltWorker
 class DownloadWorker @AssistedInject constructor(
     @Assisted context: Context,
@@ -206,13 +257,22 @@ class DownloadWorker @AssistedInject constructor(
                 check(dl.isSuccessful) { "download failed ${dl.code}" }
                 val dir = File(applicationContext.filesDir, "books").apply { mkdirs() }
                 val target = File(dir, "${book.id.replace("-", "")}.${book.format}")
-                dl.body!!.byteStream().use { input ->
-                    target.outputStream().use { output -> input.copyTo(output) }
+                // Download via a sidecar and rename on success, so an interrupted
+                // download cannot truncate a good copy that the database still
+                // points at. See stageFileAtomically.
+                stageFileAtomically(target) { output ->
+                    dl.body!!.byteStream().use { input -> input.copyTo(output) }
                 }
                 db.bookDao().setLocalFile(bookId, target.absolutePath, DownloadState.READY)
             }
             return Result.success()
-        } catch (_: Exception) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // CancellationException IS an Exception, so a bare catch-all would
+            // swallow it: WorkManager stopping this worker would turn into a retry,
+            // and the coroutine would keep writing to the database from a dead
+            // scope. Rethrow so structured concurrency still works.
+            throw e
+            } catch (_: Exception) {
             db.bookDao().setLocalFile(bookId, book.localFile, DownloadState.FAILED)
             return if (runAttemptCount >= MAX_DOWNLOAD_ATTEMPTS) Result.failure() else Result.retry()
         }

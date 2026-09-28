@@ -29,3 +29,11 @@ SESSION_CONTEXT_RECOVERY.md
 # Local Gradle / Android SDK overrides (not part of the build contract)
 .gradle-runtime/
 .android-runtime/
+
+# Robolectric JVM test runtime (downloaded android-all jars)
+android/.robolectric-home/
+android/.robolectric-deps/
+android/app/build/screenshots/
+
+# Local working notes (audit scratch docs, device captures)
+*_AUDIT_REPORT.md

@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
+import com.bookcon.app.core.isNewerIso
 
 @Dao
 interface BookDao {
@@ -25,11 +26,27 @@ interface BookDao {
     )
     fun observeLibrary(q: String?, sort: String): Flow<List<BookEntity>>
 
+    /**
+     * Every book, unfiltered, as a Flow.
+     *
+     * For joins that need to resolve a book referenced from elsewhere — the
+     * bookmarks list needs a title per row. `observeLibrary` is filtered by the
+     * caller's search and sort, so it cannot be reused for that: it would silently
+     * drop the books a search happened to exclude, and those rows would then read
+     * "Unknown book". The alternative was one `byId` query per bookmark per
+     * emission, which is the shape that stops scaling as a library grows.
+     */
+    @Query("SELECT * FROM books")
+    fun observeAll(): Flow<List<BookEntity>>
+
     @Query("SELECT * FROM books WHERE deletedAt IS NULL AND lastOpenedAt IS NOT NULL ORDER BY lastOpenedAt DESC LIMIT 10")
     fun observeContinueReading(): Flow<List<BookEntity>>
 
     @Query("SELECT * FROM books WHERE id = :id")
     fun observeBook(id: String): Flow<BookEntity?>
+
+    @Query("SELECT * FROM books WHERE id = :id")
+    suspend fun byId(id: String): BookEntity?
 
     @Query("SELECT * FROM books WHERE id = :id")
     suspend fun get(id: String): BookEntity?
@@ -99,14 +116,30 @@ interface AnnotationDao {
 
 @Dao
 interface BookmarkDao {
+    /** All rows, tombstoned ones included — the storage manager counts them. */
     @Query("SELECT * FROM bookmarks")
     suspend fun all(): List<BookmarkEntity>
+
+    /**
+     * Live list of live bookmarks.
+     *
+     * Deliberately excludes tombstoned rows: `all()` does not, so a delete in the
+     * Bookmarks tab was immediately undone by its own reload — the row vanished for
+     * a frame and came straight back, and could never be removed from that screen.
+     * A Flow rather than a suspend query so a bookmark added in the reader appears
+     * when the user navigates back to the tab.
+     */
+    @Query("SELECT * FROM bookmarks WHERE deletedAt IS NULL ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<BookmarkEntity>>
 
     @Query("SELECT * FROM bookmarks WHERE deletedAt IS NULL AND bookId = :bookId ORDER BY updatedAt ASC")
     fun observeForBook(bookId: String): Flow<List<BookmarkEntity>>
 
     @Query("SELECT * FROM bookmarks WHERE dirty = 1")
     suspend fun dirty(): List<BookmarkEntity>
+
+    @Query("SELECT * FROM bookmarks WHERE id = :id")
+    suspend fun byId(id: String): BookmarkEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(items: List<BookmarkEntity>)
@@ -129,6 +162,10 @@ interface PositionDao {
     @Query("SELECT * FROM positions")
     suspend fun all(): List<PositionEntity>
 
+    /** Primary-key lookup. `applyLww` used to pull the whole table per row. */
+    @Query("SELECT * FROM positions WHERE bookId = :bookId")
+    suspend fun byBookId(bookId: String): PositionEntity?
+
     @Query("SELECT * FROM positions WHERE dirty = 1")
     suspend fun dirty(): List<PositionEntity>
 
@@ -137,28 +174,16 @@ interface PositionDao {
 
     /** LWW guard: never let pulled rows regress or clobber pending-push state.
      *  Timestamps are parsed before comparing — client stamps end in "Z" while
-     *  server stamps end in "+00:00", so raw string comparison misorders them. */
+     *  server stamps end in "+00:00", so raw string comparison misorders them.
+     *  The comparison itself lives in core/IsoTime.kt so the archive import shares
+     *  exactly this logic instead of repeating a raw text compare. */
+    @androidx.room.Transaction
     suspend fun applyLww(item: PositionEntity) {
-        val current = all().firstOrNull { it.bookId == item.bookId }
-        if (current == null || (!current.dirty && isNewer(item.updatedAt, current.updatedAt))) {
+        val current = byBookId(item.bookId)
+        if (current == null || (!current.dirty && isNewerIso(item.updatedAt, current.updatedAt))) {
             upsert(item)
         }
     }
-
-private fun isNewer(candidate: String, stored: String): Boolean {
-    fun parse(value: String): java.time.OffsetDateTime? = try {
-        java.time.OffsetDateTime.parse(value)
-    } catch (_: Exception) {
-        try {
-            java.time.OffsetDateTime.ofInstant(java.time.Instant.parse(value), java.time.ZoneOffset.UTC)
-        } catch (_: Exception) {
-            null
-        }
-    }
-    val a = parse(candidate) ?: return candidate > stored
-    val b = parse(stored) ?: return true
-    return a.isAfter(b)
-}
 }
 
 @Dao
@@ -216,6 +241,16 @@ interface SyncCursorDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun put(cursor: SyncCursorEntity)
+
+    /**
+     * Wiped on sign-out. Cursors are per-entity, not per-user, so the previous
+     * account's watermarks survived into the next account's session. The server
+     * only returns rows newer than the cursor and scoped to the signed-in user, so
+     * the new account's older rows were filtered out and NEVER delivered — not on
+     * the first sync, not ever, because those rows do not change afterwards.
+     */
+    @Query("DELETE FROM sync_cursors")
+    suspend fun clearAll()
 }
 
 @Dao
@@ -237,6 +272,15 @@ interface UploadQueueDao {
 
     @Query("SELECT COUNT(*) FROM upload_queue WHERE state != :doneState")
     suspend fun pendingCount(doneState: Int = UploadState.DONE): Int
+
+    /**
+     * Wiped on sign-out. The queue has no user column, so entries enqueued by one
+     * account were uploaded later under the NEXT account's token — putting the first
+     * user's imported books into the second user's account. The files themselves
+     * stay on disk, so nothing is lost locally; the user can re-import.
+     */
+    @Query("DELETE FROM upload_queue")
+    suspend fun clearAll()
 }
 
 /** Notebook feature (v1.5): one notebook per book, page-anchored mixed-canvas notes. */

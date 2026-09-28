@@ -21,6 +21,7 @@ class AuthRepository @Inject constructor(
     private val api: ApiProvider,
     private val sessions: SessionStore,
     private val refresher: com.bookcon.app.data.remote.TokenRefresher,
+    private val db: com.bookcon.app.data.local.BookConDatabase,
 ) {
 
     /** PRD AUTH-1/2: email+password sign-up / login with device registration. */
@@ -61,6 +62,14 @@ class AuthRepository @Inject constructor(
     } catch (e: kotlinx.coroutines.CancellationException) {
         // Session publication switches the UI away from AuthScreen, which cancels this
         // coroutine as part of normal teardown — propagate, never convert to a failure.
+        //
+        // The placeholder session written before the network call must still be rolled
+        // back, though. Rethrowing skipped both `sessions.update(null)` paths, so a
+        // cancellation mid-request (screen torn down, navigation, backgrounding) left a
+        // "signed-in" session with empty tokens in both the prefs and the in-memory
+        // StateFlow: Settings showed the account email while every API call 401'd and
+        // the refresher tried to refresh with an empty token.
+        sessions.update(null)
         throw e
     } catch (e: Exception) {
         android.util.Log.e("BookConAuth", "emailAuth failed", e)
@@ -83,6 +92,14 @@ class AuthRepository @Inject constructor(
         val session = sessions.current() ?: return
         runCatching { api.get().logout(LogoutRequest(session.refreshToken)) }
         sessions.update(null)
+        // Sync bookkeeping is per-device, not per-user, so it has to go with the
+        // session. Cursors left behind make the next account's library permanently
+        // incomplete (its older rows are filtered out by the old watermarks), and
+        // a left-behind upload queue pushes the previous user's books into the next
+        // user's account. The local book files and highlights are NOT touched:
+        // they may be the user's own imported files, and the reader is offline-first.
+        runCatching { db.syncCursorDao().clearAll() }
+        runCatching { db.uploadQueueDao().clearAll() }
     }
 
     private fun errorMessage(code: Int, body: String?): String = when (code) {

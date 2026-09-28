@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.bookcon.app.data.remote.NameRequest
+import com.bookcon.app.data.repo.AuthRepository.Companion.newId
 
 /** Editable fields surfaced by the ModalBottomSheet edit form. */
 data class BookEditFields(
@@ -158,6 +160,51 @@ class BookDetailsViewModel @Inject constructor(
 
     // --- Add-to-shelf quick dialog ---------------------------------------------------
 
+    // --- Creating shelves / tags / series ---------------------------------------------
+    //
+    // These did not exist here. LibraryViewModel has had complete create-shelf,
+    // create-tag and create-series implementations for a long time — POST to the
+    // server, fall back to a dirty local row when offline, upsert, snackbar — but
+    // nothing in the app ever called them, so a user could never make one. Every
+    // picker in the UI lists these rows, which meant the "Add to shelf" dialog, the
+    // shelf filter and the tag multi-select were all permanently empty. The feature
+    // was built but unreachable, the same shape of gap as the annotations route.
+
+    fun createShelf(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val resp = runCatching { apiProvider.get().createShelf(NameRequest(trimmed)) }.getOrNull()
+            val dto = resp?.body()?.takeIf { resp.isSuccessful }
+            if (dto != null) {
+                organizeDao.upsertShelf(ShelfEntity(dto.id, dto.name, dto.sortPosition, dto.updatedAt, dto.deletedAt))
+                _events.send(DetailsEvent.Snackbar("Shelf created"))
+            } else {
+                // Offline-first: PushWorker drains dirty shelves via /sync/push.
+                organizeDao.upsertShelf(
+                    ShelfEntity(newId(), trimmed, System.currentTimeMillis(), nowIso(), dirty = true),
+                )
+                _events.send(DetailsEvent.Snackbar("Shelf saved offline — will sync"))
+            }
+        }
+    }
+
+    fun createTag(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val resp = runCatching { apiProvider.get().createTag(NameRequest(trimmed)) }.getOrNull()
+            val dto = resp?.body()?.takeIf { resp.isSuccessful }
+            if (dto != null) {
+                organizeDao.upsertTag(TagEntity(dto.id, dto.name, dto.updatedAt, dto.deletedAt))
+                _events.send(DetailsEvent.Snackbar("Tag created"))
+            } else {
+                organizeDao.upsertTag(TagEntity(newId(), trimmed, nowIso(), dirty = true))
+                _events.send(DetailsEvent.Snackbar("Tag saved offline — will sync"))
+            }
+        }
+    }
+
     fun addToShelf(shelfId: String) {
         val id = bookIdFlow.value ?: return
         if (shelfId.isBlank()) return
@@ -175,7 +222,11 @@ class BookDetailsViewModel @Inject constructor(
                 _events.send(DetailsEvent.Snackbar("Added to shelf"))
             } else {
                 bookDao.upsert(book.copy(shelfIds = newShelves, dirty = true))
-                _events.send(DetailsEvent.Snackbar("Saved offline — will sync"))
+                // The previous message promised a sync that cannot happen: books
+                // are not part of the sync push payload, so a metadata edit is
+                // local-only. Saying so is honest; a promise that silently never
+                // completes is worse than no promise.
+                _events.send(DetailsEvent.Snackbar("Saved on this device — book edits are not synced yet"))
             }
         }
     }
@@ -236,7 +287,11 @@ class BookDetailsViewModel @Inject constructor(
                     updatedAt = nowIso(),
                     dirty = true,
                 ))
-                _events.send(DetailsEvent.Snackbar("Saved offline — will sync"))
+                // The previous message promised a sync that cannot happen: books
+                // are not part of the sync push payload, so a metadata edit is
+                // local-only. Saying so is honest; a promise that silently never
+                // completes is worse than no promise.
+                _events.send(DetailsEvent.Snackbar("Saved on this device — book edits are not synced yet"))
             }
         }
     }
@@ -275,7 +330,15 @@ class BookDetailsViewModel @Inject constructor(
             val book = bookDao.get(id) ?: return@launch
             val ok = runCatching { apiProvider.get().deleteBook(id).isSuccessful }.getOrDefault(false)
             if (undoRequested.remove(id)) return@launch // Undo raced ahead of the tombstone
-            bookDao.upsert(book.copy(deletedAt = nowIso(), dirty = !ok))
+            if (!ok) {
+                // The server still has it, so the local row must stay. Tombstoning
+                // anyway removed the book from the device permanently: books are
+                // never pushed, so neither the tombstone nor the dirty flag that
+                // would have retried it could ever be resolved.
+                _events.send(DetailsEvent.Snackbar(DELETE_FAILED_MSG, undoBookId = id))
+                return@launch
+            }
+            bookDao.upsert(book.copy(deletedAt = nowIso()))
             _events.send(DetailsEvent.Snackbar(DELETED_MSG, undoBookId = id))
         }
     }
@@ -285,7 +348,11 @@ class BookDetailsViewModel @Inject constructor(
         undoRequested.add(bookId)
         viewModelScope.launch {
             bookDao.get(bookId)?.let { book ->
-                bookDao.upsert(book.copy(deletedAt = null, dirty = true))
+                // Just un-tombstone. The old `dirty = true` was meant to force a
+                // re-push of the delete, but books are never pushed by the sync
+                // layer, so it could never be cleared — it only made the restored
+                // book permanently skipped by applyPulled.
+                bookDao.upsert(book.copy(deletedAt = null))
             }
             _events.send(DetailsEvent.Snackbar("Delete undone"))
         }
@@ -294,6 +361,8 @@ class BookDetailsViewModel @Inject constructor(
     companion object {
         const val DELETED_MSG =
             "Deleted. The file and its annotations were removed on the server too."
+        const val DELETE_FAILED_MSG =
+            "Couldn't reach the server — the book was NOT deleted. Try again when online."
     }
 }
 

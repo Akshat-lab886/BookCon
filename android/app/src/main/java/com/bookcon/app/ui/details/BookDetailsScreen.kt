@@ -93,6 +93,8 @@ fun BookDetailsScreen(
     onBack: () -> Unit,
     openReader: () -> Unit,
     openEdit: () -> Unit,
+    /** Opens the per-book annotations list. */
+    openAnnotations: () -> Unit = {},
     viewModel: BookDetailsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -120,12 +122,24 @@ fun BookDetailsScreen(
                         snackbarHostState.showSnackbar(event.text)
                     }
                 }
-                is DetailsEvent.ShareAnnotations ->
-                    com.bookcon.app.ui.annotations.AnnotationsExporter.shareText(
+                is DetailsEvent.ShareAnnotations -> {
+                    // The result is checked here for the same reason AnnotationsScreen
+                    // checks it. shareText reports a failure instead of throwing, but
+                    // discarding that result made this call site silently do nothing
+                    // when no app could handle the intent — the user tapped Share and
+                    // got no share sheet, no error, and no idea their highlights had
+                    // gone nowhere.
+                    val ok = com.bookcon.app.ui.annotations.AnnotationsExporter.shareText(
                         context = context,
                         subject = event.subject,
                         text = event.text,
                     )
+                    if (!ok) {
+                        snackbarHostState.showSnackbar(
+                            "Couldn't open the share sheet — nothing was exported"
+                        )
+                    }
+                }
             }
         }
     }
@@ -187,6 +201,7 @@ fun BookDetailsScreen(
                 },
                 onAddToShelf = { dialog = DetailDlg.AddToShelf },
                 onExportAnnotations = viewModel::exportAnnotations,
+                onAnnotations = openAnnotations,
             )
         }
     }
@@ -198,6 +213,7 @@ fun BookDetailsScreen(
             memberOf = state.book?.shelfIds.orEmpty().toSet(),
             onCancel = { dialog = DetailDlg.None },
             onPick = { viewModel.addToShelf(it); dialog = DetailDlg.None },
+            onCreate = { viewModel.createShelf(it) },
         )
         DetailDlg.ConfirmDelete1 -> AlertDialog(
             onDismissRequest = { dialog = DetailDlg.None },
@@ -239,6 +255,8 @@ fun BookDetailsScreen(
                 onChange = { editFields = it },
                 onCancel = { dialog = DetailDlg.None },
                 onSave = { viewModel.saveEdits(it); dialog = DetailDlg.None },
+                onCreateTag = { viewModel.createTag(it) },
+                onCreateShelf = { viewModel.createShelf(it) },
             )
         }
     }
@@ -257,6 +275,7 @@ private fun DetailsContent(
     onEdit: () -> Unit,
     onAddToShelf: () -> Unit,
     onExportAnnotations: () -> Unit,
+    onAnnotations: () -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -356,9 +375,13 @@ private fun DetailsContent(
                 modifier = Modifier.weight(1f),
             )
             OutlinePillButton(
-                text = "Export ($annotationCount)",
-                icon = Icons.Filled.Share,
-                onClick = onExportAnnotations,
+                // "Export" only ever shared the text out; there was no way to
+                // actually *read* your highlights again. This routes to the
+                // per-book annotations screen, which was registered but had no
+                // caller anywhere in the app.
+                text = "Notes ($annotationCount)",
+                icon = Icons.Filled.AutoStories,
+                onClick = onAnnotations,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -433,26 +456,71 @@ private fun AddToShelfDialog(
     memberOf: Set<String>,
     onCancel: () -> Unit,
     onPick: (String) -> Unit,
+    onCreate: (String) -> Unit,
 ) {
+    var newName by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onCancel,
         title = { Text("Add to shelf") },
         text = {
-            if (shelves.isEmpty()) {
-                Text("No shelves yet — create one from the Library's Shelves tab.")
-            } else {
-                Column {
+            Column {
+                if (shelves.isEmpty()) {
+                    Text("No shelves yet — name one below to make your first.")
+                } else {
                     shelves.forEach { shelf ->
                         TextButton(onClick = { onPick(shelf.id) }) {
                             Text(if (shelf.id in memberOf) "${shelf.name} ✓" else shelf.name)
                         }
                     }
+                    HorizontalDivider()
                 }
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("New shelf name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        onCreate(newName.trim())
+                        newName = ""
+                    },
+                    enabled = newName.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Create shelf") }
             }
         },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onCancel) { Text("Close") } },
     )
+}
+
+@Composable
+private fun NewNameField(label: String, onCreate: (String) -> Unit) {
+    var name by remember(label) { mutableStateOf("") }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = name,
+            onValueChange = { name = it },
+            label = { Text(label) },
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedButton(
+            onClick = {
+                onCreate(name.trim())
+                name = ""
+            },
+            enabled = name.isNotBlank(),
+        ) { Text("Add") }
+    }
 }
 
 @Composable
@@ -463,6 +531,8 @@ private fun EditSheet(
     onChange: (BookEditFields) -> Unit,
     onCancel: () -> Unit,
     onSave: (BookEditFields) -> Unit,
+    onCreateTag: (String) -> Unit,
+    onCreateShelf: (String) -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onCancel) {
         Column(
@@ -503,6 +573,7 @@ private fun EditSheet(
                 }
                 if (tags.isEmpty()) Text("No tags yet.", style = MaterialTheme.typography.bodySmall)
             }
+            NewNameField(label = "New tag", onCreate = onCreateTag)
 
             Text("Shelves", style = MaterialTheme.typography.titleSmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -521,6 +592,7 @@ private fun EditSheet(
                 }
                 if (shelves.isEmpty()) Text("No shelves yet.", style = MaterialTheme.typography.bodySmall)
             }
+            NewNameField(label = "New shelf", onCreate = onCreateShelf)
 
             Row(modifier = Modifier.padding(bottom = 32.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text("Cancel") }

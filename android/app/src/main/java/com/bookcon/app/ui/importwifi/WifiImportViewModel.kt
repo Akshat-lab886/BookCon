@@ -11,6 +11,7 @@ import com.bookcon.app.data.local.BookEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -22,6 +23,10 @@ data class WifiImportUiState(
     val running: Boolean = false,
     val url: String? = null,
     val received: Int = 0,
+    /** Non-null when the server could not start; surfaced instead of a dead URL. */
+    val error: String? = null,
+    /** Set when an upload is refused, naming the file and the reason. */
+    val lastError: String? = null,
 )
 
 /**
@@ -35,6 +40,7 @@ class WifiImportViewModel @Inject constructor(
 ) : ViewModel() {
 
     private var server: ImportServer? = null
+    private var receivedJob: kotlinx.coroutines.Job? = null
 
     private val _state = MutableStateFlow(WifiImportUiState())
     val state: StateFlow<WifiImportUiState> = _state
@@ -42,7 +48,12 @@ class WifiImportViewModel @Inject constructor(
     fun startServer() {
         if (server != null) return
         val imports = File(appContext.filesDir, "imports").apply { mkdirs() }
-        val s = ImportServer(port = 8090) { tmpFile, displayName ->
+        val s = ImportServer(
+            port = 8090,
+            onError = { name, reason ->
+                _state.update { it.copy(lastError = "Rejected \u201c$name\u201d \u2014 $reason") }
+            },
+            onSave = { tmpFile, displayName ->
             // Called on the server's IO dispatcher.
             runCatching {
                 val dest = File(imports, "${System.currentTimeMillis()}-$displayName")
@@ -50,7 +61,8 @@ class WifiImportViewModel @Inject constructor(
                     tmpFile.copyTo(dest, overwrite = true)
                     tmpFile.delete()
                 }
-                val isPdf = displayName.lowercase().endsWith(".pdf")
+                // Trust the bytes, not the file name: the server already sniffed them.
+                val isPdf = com.bookcon.app.reader.PdfBook.looksLikePdf(dest)
                 val nowIso = java.time.Instant.now().toString()
                 val bookId = "wifi-${System.currentTimeMillis()}"
                 val baseTitle = displayName.substringBeforeLast('.')
@@ -68,32 +80,69 @@ class WifiImportViewModel @Inject constructor(
                     dirty = true,
                     localFile = dest.absolutePath,
                 )
-                kotlinx.coroutines.runBlocking {
-                    bookDao.upsert(entity)
-                    CoverExtractor.ensureCover(appContext, bookId, entity.format, dest.absolutePath)
+                // Not runBlocking: that blocked the HTTP response thread through a
+                // database write AND a cover render, so a large PDF froze the request
+                // handler for seconds. onSave is a plain function type with no scope
+                // receiver, so the work is dispatched onto the ViewModel's own scope.
+                viewModelScope.launch {
+                    withContext(Dispatchers.IO) {
+                        bookDao.upsert(entity)
+                        CoverExtractor.ensureCover(appContext, bookId, entity.format, dest.absolutePath)
+                    }
                 }
             }.onFailure {
                 android.util.Log.w("WifiImport", "save failed", it)
+                _state.update { st -> st.copy(lastError = "Couldn't save \u201c$displayName\u201d") }
             }
-        }
-        s.start()
-        server = s
-        viewModelScope.launch(Dispatchers.IO) {
-            val ip = s.localIp()
+            },
+        )
+        viewModelScope.launch {
+            // start() reports the bind outcome. It used to be fire-and-forget with a
+            // swallowed BindException, so a port clash produced a "Server running"
+            // screen with a URL nothing was listening on.
+            when (val result = s.start()) {
+                is ImportServer.StartResult.Failed -> {
+                    _state.update {
+                        it.copy(running = false, url = null, error = result.reason)
+                    }
+                    return@launch
+                }
+                ImportServer.StartResult.Started -> Unit
+            }
+            server = s
+            val ip = withContext(Dispatchers.IO) { s.localIp() }
             _state.update {
                 it.copy(
                     running = true,
-                    url = ip?.let { "http://$ip:${8090}/t${s.token}" },
-                    received = s.receivedCount,
+                    error = null,
+                    // Built from the bound port, not a repeated literal.
+                    url = ip?.let { host -> "http://$host:${s.port}/t${s.token}" },
                 )
+            }
+            // The count has to follow the server, not be sampled once at start, or the
+            // confirmation line never appears and a successful import gives no feedback.
+            //
+            // Held so stopServer can cancel it. The flow is a StateFlow and never
+            // completes, so without this each start left a collector running for the
+            // life of the ViewModel, all of them still writing into the same state.
+            receivedJob = viewModelScope.launch {
+                s.received.collect { count ->
+                    _state.update { it.copy(received = count) }
+                }
             }
         }
     }
 
     fun stopServer() {
+        receivedJob?.cancel()
+        receivedJob = null
         server?.stop()
         server = null
-        _state.update { it.copy(running = false, url = null) }
+        // The label says "received this session", so the count has to start over
+        // with the session. It did not: the previous session's total was still on
+        // screen the moment a new server started, so a fresh import that received
+        // nothing looked like it had already worked.
+        _state.update { it.copy(running = false, url = null, received = 0) }
     }
 
     override fun onCleared() {

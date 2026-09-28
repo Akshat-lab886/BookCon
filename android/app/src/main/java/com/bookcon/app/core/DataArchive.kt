@@ -39,6 +39,16 @@ object DataArchive {
         val bookmarks: Int,
         val filesCopied: Int,
         val settingsApplied: Boolean,
+        /**
+         * Books the archive promised a payload for, but which have no usable file
+         * after the import.
+         *
+         * These arrive as rows with no `localFile`, so they show up in the library
+         * and cannot be opened. Without this count the import reports a clean
+         * success and the failure only surfaces much later as "could not open this
+         * file", which reads as corruption rather than a partial restore.
+         */
+        val booksMissingFile: Int = 0,
     )
 
     // ------------------------------------------------------------------ export
@@ -61,20 +71,49 @@ object DataArchive {
             putDeflated(zip, ENTRY_MANIFEST, manifestJson().toString(2))
             totalBytes += 0
 
-            val dataJson = dataJson(settings, books, positions, annotations, bookmarks)
-            putDeflated(zip, ENTRY_DATA, dataJson)
-
-            zip.setLevel(Deflater.NO_COMPRESSION) // payloads below are already compressed
+            // The export card promises "books, reading positions, highlights and
+            // history". Reading history and the vocabulary notebook live in
+            // filesDir/stats/daily.json and filesDir/vocab/vocab.json, and neither was
+            // ever read here — so moving to a new tablet as instructed arrived with a
+            // zeroed streak and an empty vocabulary list, with no warning. They are
+            // plain JSON on disk, so they can be carried verbatim.
+            // Plan the payload entry names BEFORE writing data.json, so each book
+            // records the name its own bytes were actually stored under.
+            //
+            // This used to record the plain basename while the payload loop renamed
+            // collisions to "<hash>-<name>". Two books called "book.epub" therefore
+            // both pointed at the first one's file on import, and the second
+            // silently opened the first book's content — a backup that restores the
+            // wrong data with no error anywhere.
+            val payloadNames = LinkedHashMap<String, String>()
             val seen = HashSet<String>()
             for (book in books) {
                 val path = book.localFile ?: continue
                 val src = File(path)
                 if (!src.exists() || src.length() == 0L) continue
-                // Dedupe identical basenames inside one archive.
-                var base = src.name
-                if (!seen.add(base)) base = "${src.hashCode()}-$base"
-                val entry = ZipEntry("$ENTRY_FILES$base")
-                zip.putNextEntry(entry)
+                val base = src.name
+                val entry = if (seen.add(base)) base else {
+                    val unique = "${src.hashCode()}-$base"
+                    seen.add(unique)
+                    unique
+                }
+                payloadNames[book.id] = entry
+            }
+
+            val dataJson = dataJson(
+                settings, books, positions, annotations, bookmarks,
+                readingHistory = readJsonFile(File(context.filesDir, "stats/daily.json")),
+                vocabulary = readJsonArray(File(context.filesDir, "vocab/vocab.json")),
+                entryNames = payloadNames,
+            )
+            putDeflated(zip, ENTRY_DATA, dataJson)
+
+            zip.setLevel(Deflater.NO_COMPRESSION) // payloads below are already compressed
+            for (book in books) {
+                val path = book.localFile ?: continue
+                val src = File(path)
+                val base = payloadNames[book.id] ?: continue
+                zip.putNextEntry(ZipEntry("$ENTRY_FILES$base"))
                 src.inputStream().use { it.copyTo(zip, 64 * 1024) }
                 zip.closeEntry()
                 totalBytes += src.length()
@@ -111,6 +150,7 @@ object DataArchive {
         var statsAnnotations = 0
         var statsBookmarks = 0
         var statsFiles = 0
+        var statsMissingFile = 0
 
         ZipInputStream(input.buffered()).use { zip ->
             // Files stream straight to disk; rows apply once data.json is seen.
@@ -125,7 +165,14 @@ object DataArchive {
                         val base = entry.name.removePrefix(ENTRY_FILES)
                         if (base.isNotBlank() && !base.contains("..")) {
                             val dest = stagedFile(context, base)
-                            dest.outputStream().use { zip.copyTo(it, 64 * 1024) }
+                            // Staged and renamed like every other file this app writes.
+                            // resolveVaultFile() below accepts any non-empty file as a
+                            // restored book, so an extraction killed mid-copy would
+                            // otherwise leave a partial file that a later import could
+                            // pick up and point a book at.
+                            com.bookcon.app.data.sync.stageFileAtomically(dest) { out ->
+                                zip.copyTo(out, 64 * 1024)
+                            }
                             statsFiles++
                         }
                     }
@@ -141,8 +188,15 @@ object DataArchive {
                     val resolved = base.localFile
                         ?.let { resolveVaultFile(context, it)?.absolutePath }
                     val book = base.copy(localFile = resolved ?: base.localFile?.takeIf { !it.startsWith("__VAULT__:") })
+                    // The archive recorded a payload for this book, but no usable
+                    // file came out of it. Count it so the caller can say so.
+                    if (base.localFile?.startsWith("__VAULT__:") == true && resolved == null) {
+                        statsMissingFile++
+                    }
                     val existingAt = sink.existingBookUpdatedAt(book.id)
-                    val newer = existingAt?.let { it >= book.updatedAt } == true
+                    // Format-agnostic: a local stamp ends in "Z" and a pulled one in "+00:00",
+                    // so a text compare misorders two rows that are really the same age.
+                    val newer = existingAt?.let { isNewerIso(book.updatedAt, it) } == true
                     if (!newer) {
                         sink.upsertBook(book)
                         statsBooks++
@@ -153,7 +207,7 @@ object DataArchive {
                     val o = data.getJSONArray("positions").getJSONObject(i)
                     val p = positionFromJson(o) ?: continue
                     val ex = sink.existingPosition(p.bookId)
-                    if (ex == null || ex.updatedAt < p.updatedAt) {
+                    if (ex == null || isNewerIso(p.updatedAt, ex.updatedAt)) {
                         sink.upsertPosition(p); statsPositions++
                     }
                 }
@@ -162,7 +216,7 @@ object DataArchive {
                     val o = data.getJSONArray("annotations").getJSONObject(i)
                     val a = annotationFromJson(o) ?: continue
                     val ex = sink.existingAnnotation(a.id)
-                    if (ex == null || ex.updatedAt < a.updatedAt || (a.deletedAt != null && ex.deletedAt == null)) {
+                    if (ex == null || isNewerIso(a.updatedAt, ex.updatedAt) || (a.deletedAt != null && ex.deletedAt == null)) {
                         sink.upsertAnnotation(a); statsAnnotations++
                     }
                 }
@@ -171,7 +225,7 @@ object DataArchive {
                     val o = data.getJSONArray("bookmarks").getJSONObject(i)
                     val b = bookmarkFromJson(o) ?: continue
                     val ex = sink.existingBookmark(b.id)
-                    if (ex == null || ex.updatedAt < b.updatedAt || (b.deletedAt != null && ex.deletedAt == null)) {
+                    if (ex == null || isNewerIso(b.updatedAt, ex.updatedAt) || (b.deletedAt != null && ex.deletedAt == null)) {
                         sink.upsertBookmark(b); statsBookmarks++
                     }
                 }
@@ -181,9 +235,43 @@ object DataArchive {
                         applySettings(settingsFromJson(s, currentSettings))
                     }
                 }
+                // --- reading history + vocabulary --------------------------------
+                // Restored only when this device has nothing, so a re-import cannot
+                // wipe history that has accumulated since the archive was taken.
+                data.optJSONObject("readingHistory")?.let { history ->
+                    if (history.length() > 0) restoreFileJson(
+                        context, File(context.filesDir, "stats/daily.json"), history,
+                    )
+                }
+                data.optJSONArray("vocabulary")?.let { vocab ->
+                    if (vocab.length() > 0) restoreFileJson(
+                        context, File(context.filesDir, "vocab/vocab.json"), vocab,
+                    )
+                }
             }
         }
-        return ImportStats(statsBooks, statsPositions, statsAnnotations, statsBookmarks, statsFiles, false)
+        return ImportStats(
+            statsBooks, statsPositions, statsAnnotations, statsBookmarks, statsFiles, false,
+            booksMissingFile = statsMissingFile,
+        )
+    }
+
+    /**
+     * Writes a restored JSON document back into filesDir, but only if the device has
+     * no data there yet. Overwriting unconditionally would let a stale archive erase
+     * reading history the user has built up since exporting it.
+     */
+    private fun restoreFileJson(context: Context, file: File, payload: Any) {
+        runCatching {
+            file.parentFile?.mkdirs()
+            if (file.exists() && file.length() > 0) return@runCatching
+            val text = payload.toString()
+            val tmp = File(file.parentFile, "${file.name}.restore")
+            tmp.writeText(text)
+            if (!tmp.renameTo(file)) {
+                runCatching { tmp.delete() }
+            }
+        }
     }
 
     /** Files land in imports/ under an archive-prefixed name; re-import reuses them. */
@@ -200,6 +288,9 @@ object DataArchive {
         positions: List<com.bookcon.app.data.local.PositionEntity>,
         annotations: List<com.bookcon.app.data.local.AnnotationEntity>,
         bookmarks: List<com.bookcon.app.data.local.BookmarkEntity>,
+        readingHistory: JSONObject? = null,
+        vocabulary: JSONArray? = null,
+        entryNames: Map<String, String> = emptyMap(),
     ): String {
         val settingsArr = JSONObject()
             .put("themeMode", settings.themeMode)
@@ -229,7 +320,7 @@ object DataArchive {
                 .put("updatedAt", b.updatedAt)
                 .putOpt("deletedAt", b.deletedAt)
                 .put("dirty", b.dirty)
-                .putOpt("localFileBase", b.localFile?.let { File(it).name }))
+                .putOpt("localFileBase", entryNames[b.id]))
         }
         val pos = JSONArray()
         positions.forEach { p ->
@@ -265,14 +356,28 @@ object DataArchive {
                 .put("updatedAt", k.updatedAt)
                 .putOpt("deletedAt", k.deletedAt))
         }
-        return JSONObject()
+        val root = JSONObject()
             .put("settings", settingsArr)
             .put("books", arr)
             .put("positions", pos)
             .put("annotations", ann)
             .put("bookmarks", bm)
-            .toString(2)
+        // Optional extras. An archive written before these keys still imports, because
+        // every read on the import side goes through opt* accessors.
+        readingHistory?.let { root.put("readingHistory", it) }
+        vocabulary?.let { root.put("vocabulary", it) }
+        return root.toString(2)
     }
+
+    /** Reads a file-backed JSON document, or null when it is absent or unreadable. */
+    private fun readJsonFile(file: File): JSONObject? = runCatching {
+        if (file.exists() && file.length() > 0) JSONObject(file.readText()) else null
+    }.getOrNull()
+
+    /** Reads a file-backed JSON array, or null when it is absent or unreadable. */
+    private fun readJsonArray(file: File): JSONArray? = runCatching {
+        if (file.exists() && file.length() > 0) JSONArray(file.readText()) else null
+    }.getOrNull()
 
     private fun optStr(o: JSONObject, k: String): String? =
         if (o.isNull(k)) null else o.optString(k, null)

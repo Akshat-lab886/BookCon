@@ -51,6 +51,37 @@ android {
             signingConfig = signingConfigs.getByName("release")
         }
     }
+    // Robolectric downloads the `android-all` runtime jar into the user's home
+    // directory by default, which is read-only in this environment. Point its
+    // dependency cache (and the lock file it creates there) at the workspace.
+    tasks.withType<Test>().configureEach {
+        // Robolectric resolves its `android-all` runtime jar against the JVM's
+        // user.home (read-only here), so point user.home at the workspace.
+        systemProperty("user.home", "${rootProject.projectDir}/.robolectric-home")
+        systemProperty("robolectric.logging", "stdout")
+        maxHeapSize = "2g"
+
+        // The @GraphicsMode(NATIVE) tests are environment-flaky, not app-flaky.
+        // 22 of them fail with `UnsatisfiedLinkError: RenderNodeNatives.nCreate`
+        // on some runs and pass on others with no code change in between; the other
+        // tests are always green. The native runtime registers its JNI methods from
+        // JNI_OnLoad, so a partial or contended extraction shows up as a missing
+        // symbol rather than a clear error. Disk pressure makes it markedly worse
+        // (it was 100% reproducible at 96% full) but it is not the only factor.
+        // One fork removes the cross-JVM extraction race, which is the part we can
+        // actually control. If these fail, free disk space and re-run before
+        // suspecting a real regression.
+        maxParallelForks = 1
+    }
+
+    testOptions {
+        // Robolectric needs merged resources + native graphics to rasterise Compose.
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -137,6 +168,17 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.turbine)
+    // JVM-side rendering of the Compose UI so the screens can be verified
+    // without a device attached (Robolectric native graphics).
+    testImplementation(libs.robolectric)
+    testImplementation(libs.mockito.core)
+    testImplementation(libs.mockito.kotlin)
+    testImplementation(kotlin("test"))
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.espresso.core)
 }

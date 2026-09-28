@@ -61,7 +61,13 @@ class TokenRefresher @Inject constructor(
             sessions.update(null)
             null
         }
-    } catch (_: Exception) {
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // CancellationException IS an Exception, so a bare catch-all would
+        // swallow it: WorkManager stopping this worker would turn into a retry,
+        // and the coroutine would keep writing to the database from a dead
+        // scope. Rethrow so structured concurrency still works.
+        throw e
+        } catch (_: Exception) {
         null
     }
 }

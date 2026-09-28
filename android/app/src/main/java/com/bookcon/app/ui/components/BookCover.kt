@@ -45,10 +45,13 @@ fun BookCover(
             .background(placeholderTint),
         contentAlignment = Alignment.Center,
     ) {
-        val url = resolveCoverUrl(serverUrl, coverUrl)
-        val painter = rememberBookPainter(url)
         if (coverUrl.isNullOrBlank()) {
-            // Initial-letter fallback
+            // Initial-letter fallback.
+            //
+            // Deliberately does NOT call rememberBookPainter: that resolves the
+            // authenticated Coil ImageLoader through Hilt, which pulls in
+            // SessionStore and the Android Keystore. Paying that cost to draw two
+            // letters is wasteful, and the library grid renders dozens of covers.
             val initials = title
                 .split(Regex("\\s+"))
                 .take(2)
@@ -63,8 +66,9 @@ fun BookCover(
                 textAlign = TextAlign.Center,
             )
         } else {
+            val url = resolveCoverUrl(serverUrl, coverUrl)
             Image(
-                painter = painter,
+                painter = rememberBookPainter(url),
                 contentDescription = title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

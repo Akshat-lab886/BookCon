@@ -10,6 +10,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -71,6 +72,12 @@ class VoiceAssistant @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var listenJob: Job? = null
     private var speakJob: Job? = null
+    /**
+     * The recognizer for the current activation. Held so it can be destroyed —
+     * a fresh one was created on every press and never released, leaking an engine
+     * (and its audio resources) per use.
+     */
+    private var recognizer: SpeechRecognizer? = null
 
     // -- speech-to-text --------------------------------------------------------
 
@@ -80,8 +87,20 @@ class VoiceAssistant @Inject constructor(
             _state.update { it.copy(phase = Phase.ERROR, error = "Speech recognition unavailable on this device") }
             return null
         }
-        val sr = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
-            ?: SpeechRecognizer.createSpeechRecognizer(appContext)
+        // Release any previous recognizer before making a new one.
+        recognizer?.destroy()
+        // createOnDeviceSpeechRecognizer is API 31+. Calling it on API 26-30 does
+        // not return null, it throws NoSuchMethodError, which crashed the reader
+        // outright on older devices. The `?:` fallback below was unreachable
+        // because the call never came back.
+        val sr = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext) }
+                .getOrNull()
+                ?: SpeechRecognizer.createSpeechRecognizer(appContext)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(appContext)
+        }
+        recognizer = sr
         sr.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
             override fun onBeginningOfSpeech() {}
@@ -243,7 +262,18 @@ class VoiceAssistant @Inject constructor(
         listenJob?.cancel()
         speakJob?.cancel()
         readAloud?.shutdown()
+        runCatching { recognizer?.destroy() }
+        recognizer = null
         _state.update { VoiceState() }
+    }
+
+    /**
+     * Full teardown. [stop] leaves the scope alive because the assistant is reusable;
+     * this is what the reader calls when it goes away for good.
+     */
+    fun release() {
+        stop()
+        scope.cancel()
     }
 
     private fun reset() {

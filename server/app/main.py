@@ -127,12 +127,17 @@ def create_app() -> FastAPI:
     install_error_handlers(app)
     app.add_middleware(ObservabilityMiddleware)
 
+    from app.web import mount_web
+
+    mount_web(app)
+
     @app.get("/", include_in_schema=False)
     def root() -> dict:
         return {
             "name": "BookCon API",
             "version": "1.0.0",
             "docs": f"{settings.public_base_url}/api/v1/docs",
+            "web": f"{settings.public_base_url}/app",
         }
 
     return app

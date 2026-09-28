@@ -27,6 +27,14 @@ data class AuthUiState(
     val serverError: String? = null,
     val emailError: String? = null,
     val passwordError: String? = null,
+    /**
+     * Non-null when the server URL is plain http and is not loopback. The account
+     * password, the bearer token and the long-lived refresh token all travel
+     * unencrypted in that case, so the user is told before they sign in rather than
+     * discovering it on a hostile network. Loopback is excluded because that is the
+     * normal `adb reverse` development setup and is not exposed off-device.
+     */
+    val insecureWarning: String? = null,
 )
 
 sealed interface AuthEvent {
@@ -59,8 +67,15 @@ class AuthViewModel @Inject constructor(
         }
     }
 
+    /** Keeps the transport warning live as the URL is edited, not only on submit. */
     fun onServerUrlChange(value: String) =
-        _state.update { it.copy(serverUrl = value, serverError = null) }
+        _state.update {
+            it.copy(
+                serverUrl = value,
+                serverError = null,
+                insecureWarning = insecureServerWarning(value.trim().trimEnd('/')),
+            )
+        }
 
     fun onEmailChange(value: String) =
         _state.update { it.copy(email = value, emailError = null) }
@@ -83,7 +98,14 @@ class AuthViewModel @Inject constructor(
     }
 
     fun setRegisterMode(register: Boolean) =
-        _state.update { it.copy(registerMode = register, passwordError = null, serverError = null) }
+        _state.update {
+            it.copy(
+                registerMode = register,
+                passwordError = null,
+                serverError = null,
+                insecureWarning = null,
+            )
+        }
 
     /** Client-side validation per PRD AUTH-1, then persist server URL *before* the auth call. */
     fun submit() {
@@ -95,6 +117,12 @@ class AuthViewModel @Inject constructor(
         if (!server.startsWith("http://") && !server.startsWith("https://")) {
             _state.update { it.copy(serverError = "Use an http(s):// URL") }
             valid = false
+        }
+        val insecure = insecureServerWarning(server)
+        if (insecure != null) {
+            _state.update { it.copy(insecureWarning = insecure) }
+            // Not a hard error: a self-hosted server on a home LAN is a legitimate
+            // setup and this app is built for it. But the user gets to know.
         }
         val email = s.email.trim()
         if (!EMAIL_REGEX.matches(email)) {
@@ -135,4 +163,36 @@ class AuthViewModel @Inject constructor(
         const val MIN_PASSWORD_LENGTH = 8
         private val EMAIL_REGEX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
     }
+}
+
+/**
+ * Warns when the server URL would carry credentials in cleartext.
+ *
+ * Returns null for https and for loopback. The check is deliberately narrow: this
+ * is a self-hosted app and plain http to a server on the user's own LAN is a
+ * normal, expected configuration. What is not acceptable is the user not knowing
+ * that their password and refresh token are readable by anything on the path.
+ */
+internal fun insecureServerWarning(serverUrl: String): String? {
+    if (!serverUrl.startsWith("http://")) return null
+    val host = hostOf(serverUrl.removePrefix("http://"))
+    val loopback = host.equals("localhost", ignoreCase = true) ||
+        host == "::1" ||
+        host.startsWith("127.")
+    if (loopback) return null
+    return "This connection is not encrypted. Your password and session token " +
+        "will be sent over plain HTTP — use https:// or a trusted network."
+}
+
+/**
+ * Extracts the host from `host[:port][/path]`.
+ *
+ * The bracketed IPv6 form has to be handled first: splitting "::1]:8000" on ':'
+ * yields "[", so a naive `substringBefore(':')` made [::1] look like a remote
+ * address and the loopback development server warned about itself.
+ */
+private fun hostOf(authorityAndPath: String): String {
+    val authority = authorityAndPath.substringBefore('/').trim()
+    if (authority.startsWith("[")) return authority.substringAfter('[').substringBefore(']')
+    return authority.substringBefore(':').trim()
 }

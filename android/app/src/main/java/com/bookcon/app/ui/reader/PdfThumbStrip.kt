@@ -58,6 +58,14 @@ fun PdfThumbStrip(
                 if (bmp != null) cache[i] = bmp
             }
         }
+        // Bound the cache to the window being shown. It previously kept one bitmap
+        // per page the reader had ever visited, so a long PDF grew until it hit the
+        // heap limit. Evicted bitmaps are dropped rather than recycled(): the pager
+        // may still be drawing one this frame, and recycling a bitmap that is still
+        // referenced throws.
+        cache.keys
+            .filter { it < from || it > to }
+            .forEach { cache.remove(it) }
     }
 
     LazyRow(

@@ -59,6 +59,22 @@ fun StorageManagerScreen(
     onBack: () -> Unit,
     viewModel: StorageManagerViewModel = hiltViewModel(),
 ) {
+    // These registrations must live at the top of the screen, NOT inside the
+    // LazyColumn item that holds the "Server" card. A launcher created inside an item
+    // is bound to that item's composition: scroll the card out of view while the
+    // system file picker is open and the launcher unregisters, so the returned Uri is
+    // dropped and the import/export silently does nothing when the user comes back.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip"),
+    ) { uri ->
+        uri?.let(viewModel::exportVault)
+    }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let(viewModel::importVault)
+    }
+
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var dialog by remember { mutableStateOf<StorageDlg>(StorageDlg.None) }
@@ -117,17 +133,6 @@ fun StorageManagerScreen(
                                         label = { Text(label) },
                                     )
                                 }
-                            }
-
-                            val exportLauncher = rememberLauncherForActivityResult(
-                                ActivityResultContracts.CreateDocument("application/zip"),
-                            ) { uri ->
-                                uri?.let(viewModel::exportVault)
-                            }
-                            val importLauncher = rememberLauncherForActivityResult(
-                                ActivityResultContracts.OpenDocument(),
-                            ) { uri ->
-                                uri?.let(viewModel::importVault)
                             }
 
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {

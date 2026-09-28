@@ -35,6 +35,13 @@ import com.bookcon.app.ui.components.AppTopBar
 import com.bookcon.app.ui.components.EmptyState
 import com.bookcon.app.ui.components.OutlinePillButton
 import com.bookcon.app.ui.components.PillButton
+import com.bookcon.app.ui.components.RefreshOnResume
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
 /** Vocabulary notebook: due-card review + browse list + auto-capture toggle (PRD VOC-*).
  *  v1.3 redesign: blue AppTopBar, hairline-bordered cards, pill review buttons,
@@ -50,6 +57,10 @@ fun VocabScreen(
     val revealed by viewModel.revealed.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
+    // Same staleness as the stats screen: the ViewModel survives back-navigation, so
+    // words saved from the reader while this screen was not on top never showed up.
+    RefreshOnResume { viewModel.refresh() }
+
     Scaffold(
         topBar = {
             AppTopBar(
@@ -64,6 +75,35 @@ fun VocabScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            // Deleting a word is now reversible, so a stray tap is recoverable.
+            // The pending delete is discarded after a grace period so the row does
+            // not linger forever.
+            //
+            // Keyed on the pending removal itself. It used to be keyed on a nonce
+            // that only changed when Undo was pressed, so the countdown never
+            // started after a delete and the banner stayed on screen indefinitely.
+            val pending by viewModel.pendingRemoval.collectAsStateWithLifecycle()
+            LaunchedEffect(pending) {
+                if (pending == null) return@LaunchedEffect
+                kotlinx.coroutines.delay(5_000L)
+                if (viewModel.hasUndoableRemove()) viewModel.undoRemove()
+            }
+            if (pending != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Word removed",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { viewModel.undoRemove() }) { Text("Undo") }
+                }
+            }
+
             // Auto-capture toggle row
             Row(
                 modifier = Modifier

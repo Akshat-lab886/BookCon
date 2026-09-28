@@ -94,8 +94,11 @@ fun AnnotationsScreen(
         viewModel.events.collect { event ->
             when (event) {
                 is AnnotationsEvent.Share -> {
-                    AnnotationsExporter.shareText(context, event.subject, event.text)
-                    snackbarHostState.showSnackbar("Exported as ${event.format.label}")
+                    val ok = AnnotationsExporter.shareText(context, event.subject, event.text)
+                    snackbarHostState.showSnackbar(
+                        if (ok) "Exported as ${event.format.label}"
+                        else "Couldn't open the share sheet — nothing was exported",
+                    )
                 }
             }
         }

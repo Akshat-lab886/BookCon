@@ -21,16 +21,24 @@ class AiKeyStore(context: Context) {
     /** The stored API key, or "" when unset or unreadable. Never throws. */
     fun get(): String = runCatching { prefs.getString(KEY, null) }.getOrNull().orEmpty()
 
-    /** Persists [key]; failures are swallowed (callers cannot do much about storage errors). */
-    fun set(key: String) {
-        runCatching { prefs.edit().putString(KEY, key.trim()).commit() }
-            .onFailure { Log.w(TAG, "Failed to persist AI key", it) }
+    /**
+     * Persists [key]. Returns false if the write did not reach disk.
+     *
+     * The previous version discarded `commit()`'s Boolean, so a full disk or a
+     * storage error looked exactly like success and the settings screen told the user
+     * "Key saved on this device". They then lost a paid API key with no error.
+     */
+    fun set(key: String): Boolean {
+        val result = runCatching { prefs.edit().putString(KEY, key.trim()).commit() }
+        result.exceptionOrNull()?.let { Log.w(TAG, "Failed to persist AI key", it) }
+        return result.getOrDefault(false)
     }
 
-    /** Removes the stored key; failures are swallowed. */
-    fun clear() {
-        runCatching { prefs.edit().remove(KEY).commit() }
-            .onFailure { Log.w(TAG, "Failed to clear AI key", it) }
+    /** Removes the stored key. Returns false if the removal did not reach disk. */
+    fun clear(): Boolean {
+        val result = runCatching { prefs.edit().remove(KEY).commit() }
+        result.exceptionOrNull()?.let { Log.w(TAG, "Failed to clear AI key", it) }
+        return result.getOrDefault(false)
     }
 
     private fun createPrefs(context: Context): SharedPreferences {
@@ -58,7 +66,13 @@ class AiKeyStore(context: Context) {
      * One-time migration: if the Keystore worked this launch but a key was saved to
      * the fallback file during a degraded session, promote it into secure storage
      * (and vice versa never happens — secure always wins once available).
+     *
+     * commit() is deliberate in both directions. The destination has to be durable
+     * before the source is cleared, otherwise a process death in between loses the
+     * user's API key outright. Doing the copy with apply() would have had a real
+     * window for that.
      */
+    @Suppress("ApplySharedPref")
     private fun migrateFallbackInto(securePrefs: SharedPreferences, context: Context) {
         runCatching {
             val fallback = context.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)

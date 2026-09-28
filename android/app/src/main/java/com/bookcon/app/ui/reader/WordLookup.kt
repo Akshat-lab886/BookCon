@@ -34,22 +34,48 @@ import kotlinx.coroutines.launch
  *     val lookupWord = remember { mutableStateOf<String?>(null) }
  *     WordLookupHost(state = lookupWord, onSaved = { ... })
  *
- * "Save to vocabulary" persists through [VocabStore] (capture gating is done by
- * the caller via SettingsRepository.vocabCaptureEnabled).
+ * "Save to vocabulary" persists through [VocabStore].
+ *
+ * [autoCapture] is the real gate behind the "Auto-capture" switch. The switch used to
+ * be persisted and displayed but read by nothing except itself: the only code path
+ * that ever stored a word was the explicit Save button, and its caller never checked
+ * the setting. Turning auto-capture off changed the chip and survived restarts while
+ * having no effect on anything. With autoCapture on, looking a word up now saves it
+ * automatically; with it off, saving is still available by hand.
  */
 @Composable
 fun WordLookupHost(
     state: androidx.compose.runtime.MutableState<String?>,
+    autoCapture: Boolean = false,
     onSaved: (() -> Unit)? = null,
 ) {
-    val word = state.value ?: return
+    // Hoisted ABOVE the early return on purpose. Returning first tore down the
+    // composition whenever no word was selected, so the `remember` below was
+    // discarded and the next lookup re-read and re-parsed the whole ~86k-line
+    // dictionary. It is expensive enough that it belongs for the reader's lifetime.
     val context = LocalContext.current
+    val dictionary = remember(context) { Dictionary.get(context) }
+    val vocab = remember { VocabStore(context) }
+
+    val word = state.value ?: return
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var definition by remember(word) { mutableStateOf<String?>(null) }
     var lookedUp by remember(word) { mutableStateOf(false) }
     var saved by remember(word) { mutableStateOf(false) }
-    val dictionary = remember { Dictionary(context) }
-    val vocab = remember { VocabStore(context) }
+
+    // Auto-capture: the setting now actually does something.
+    LaunchedEffect(word, autoCapture) {
+        if (autoCapture) {
+            val meaning = dictionary.lookup(word)?.meaning
+            if (meaning != null) {
+                scope.launch {
+                    vocab.add(word.trim().lowercase(), meaning)
+                    saved = true
+                    onSaved?.invoke()
+                }
+            }
+        }
+    }
 
     LaunchedEffect(word) {
         definition = dictionary.lookup(word)?.meaning

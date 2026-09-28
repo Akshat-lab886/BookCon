@@ -64,6 +64,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bookcon.app.ui.components.AppTopBar
+import com.bookcon.app.ui.theme.BrandColors
+import com.bookcon.app.ui.components.RefreshOnResume
 
 private val THEME_OPTIONS = listOf(
     "auto" to "Follow system",
@@ -91,6 +93,10 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val lastSyncedAt by viewModel.lastSyncedAt.collectAsStateWithLifecycle()
+    val pendingChanges by viewModel.pendingChanges.collectAsStateWithLifecycle()
+    // Re-read on return: a background push may have cleared the backlog while the
+    // user was elsewhere in the app.
+    RefreshOnResume { viewModel.refreshPendingChanges() }
     val snackbarHostState = remember { SnackbarHostState() }
     var showLicenses by remember { mutableStateOf(false) }
     var confirmSignOut by remember { mutableStateOf(false) }
@@ -193,11 +199,24 @@ fun SettingsScreen(
                 ListItem(
                     headlineContent = { Text("Last synced", style = MaterialTheme.typography.titleMedium) },
                     supportingContent = {
-                        Text(
-                            formatStamp(lastSyncedAt),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Column {
+                            Text(
+                                formatStamp(lastSyncedAt),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            // "Last synced" only moves when a pull completes, so on
+                            // its own it stays reassuringly green while edits the
+                            // server refused sit on the device forever. This is the
+                            // other half of that picture.
+                            if (pendingChanges > 0) {
+                                Text(
+                                    "$pendingChanges change${if (pendingChanges == 1) "" else "s"} not uploaded yet",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = BrandColors.Salmon,
+                                )
+                            }
+                        }
                     },
                     leadingContent = { AvatarCircle(Icons.Filled.Sync, MaterialTheme.colorScheme.primaryContainer) },
                 )

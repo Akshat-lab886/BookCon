@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bookcon.app.core.ReadingTracker
+import com.bookcon.app.data.local.BookDao
 import com.bookcon.app.core.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -27,6 +28,7 @@ data class StatsUiState(
 class StatsViewModel @Inject constructor(
     @ApplicationContext appContext: Context,
     private val settingsRepo: SettingsRepository,
+    private val bookDao: BookDao,
 ) : ViewModel() {
 
     private val tracker = ReadingTracker(appContext)
@@ -53,6 +55,12 @@ class StatsViewModel @Inject constructor(
                 val key = LocalDate.now().minusDays(offset.toLong()).toString()
                 tracker.booksFor(key).forEach { byBook[it.bookId] = (byBook[it.bookId] ?: 0) + it.minutes }
             }
+            // Titles come straight from the library table. They used to be supplied
+            // by supplyTitles(), which nothing in the app ever called, so every row
+            // in "This week by book" rendered a truncated raw id like
+            // "a1b2c3d4-e56…" instead of the book's name.
+            val titles = resolveTitles(byBook.keys)
+            bookTitles.putAll(titles)
             val weekBooks = byBook.entries
                 .sortedByDescending { it.value }
                 .map { (resolveTitle(it.key)) to it.value }
@@ -82,6 +90,18 @@ class StatsViewModel @Inject constructor(
     fun supplyTitles(titlesById: Map<String, String>) {
         bookTitles.putAll(titlesById)
         refresh()
+    }
+
+    /** Looks the ids up in the library; an id with no book row falls back to itself. */
+    private suspend fun resolveTitles(ids: Set<String>): Map<String, String> {
+        val found = HashMap<String, String>()
+        for (id in ids) {
+            runCatching { bookDao.byId(id)?.title }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { found[id] = it }
+        }
+        return found
     }
 
     private fun resolveTitle(bookId: String): String =

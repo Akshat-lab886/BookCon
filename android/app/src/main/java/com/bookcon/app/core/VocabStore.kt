@@ -90,6 +90,21 @@ class VocabStore(context: Context) {
         }
     }
 
+    /**
+     * Re-inserts an entry verbatim, preserving its Leitner box and due time.
+     *
+     * Undo needs this: [add] starts a brand-new entry at box 0, so restoring a word
+     * with it would silently reset the spaced-repetition progress the user had built
+     * up — an "undo" that quietly loses the thing being undone.
+     */
+    suspend fun restoreEntry(entry: VocabEntry) {
+        mutate { list ->
+            val key = entry.normalizedWord()
+            list.removeAll { it.normalizedWord() == key }
+            list += entry
+        }
+    }
+
     /** Number of stored entries. */
     suspend fun count(): Int = snapshot().size
 

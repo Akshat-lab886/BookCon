@@ -6,9 +6,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import android.util.LruCache
 import java.io.File
-import java.io.FileOutputStream
 import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,6 +26,18 @@ import kotlinx.coroutines.withContext
  */
 object CoverExtractor {
     private const val MAX_DIM = 512
+
+    /**
+     * Hard cap on bytes pulled out of one zip entry.
+     *
+     * `readBytes()` on a zip entry is unbounded, and a malformed or hostile book can
+     * declare a cover of any size. These entries are only ever thumbnails or small
+     * XML documents, so a few megabytes is far more than a real book needs — and
+     * `runCatching` around the caller turns an over-read into a silent "no cover"
+     * only after the allocation has already stressed the heap.
+     */
+    private const val MAX_ENTRY_BYTES = 8 * 1024 * 1024
+
     private val failureCache = LruCache<String, Boolean>(64)
 
     suspend fun ensureCover(
@@ -49,12 +61,28 @@ object CoverExtractor {
             failureCache.put(bookId, true)
             return@withContext null
         }
-        runCatching {
-            out.parentFile?.mkdirs()
-            FileOutputStream(out).use { bitmap.compress(Bitmap.CompressFormat.PNG, 90, it) }
+        // The cover is written through a sidecar and renamed only once it is whole.
+        //
+        // The guard above accepts any non-empty file as a finished cover, so writing
+        // straight to the final path meant a compress that failed or was cut short
+        // left a truncated PNG there — and from then on every import skipped
+        // regeneration and Coil failed to load it. The book showed a permanently
+        // broken cover with nothing in the logs and no way to recover it short of
+        // clearing app data.
+        try {
+            val written = com.bookcon.app.data.sync.stageFileAtomically(out) { sink ->
+                // compress() reports failure by returning false rather than throwing.
+                check(bitmap.compress(Bitmap.CompressFormat.PNG, 90, sink)) {
+                    "PNG compression failed for $bookId"
+                }
+            }
+            fileUrl(written)
+        } catch (t: Throwable) {
+            Log.w("CoverExtractor", "cover write failed for $bookId", t)
+            null
+        } finally {
             bitmap.recycle()
-            fileUrl(out)
-        }.getOrNull()
+        }
     }
 
     fun coverFile(context: Context, bookId: String): File =
@@ -67,11 +95,67 @@ object CoverExtractor {
     private fun renderEpubCover(path: String): Bitmap? {
         ZipFile(File(path)).use { zip ->
             val entry = findEpubCoverEntry(zip) ?: return null
-            val bytes = zip.getInputStream(entry).readBytes()
-            val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                ?: return null
-            return scaleDown(bmp)
+            val bytes = readEntry(zip, entry) ?: return null
+            return decodeCover(bytes)
         }
+    }
+
+    /** Reads at most [MAX_ENTRY_BYTES] from [entry]; null when it is larger. */
+    private fun readEntry(zip: ZipFile, entry: java.util.zip.ZipEntry): ByteArray? =
+        zip.getInputStream(entry).use { input ->
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(16 * 1024)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > MAX_ENTRY_BYTES) return null
+                out.write(buffer, 0, read)
+            }
+            out.toByteArray()
+        }
+
+    /**
+     * Decodes a cover at thumbnail size.
+     *
+     * Decoding straight to a bitmap allocates the image at its FULL resolution
+     * first — an 8000x6000 cover is ~192 MB of ARGB_8888 — and only afterwards
+     * shrinks it to [MAX_DIM]. A cover is never shown larger than a library tile,
+     * so that peak is pure waste and an easy way to be killed for memory while
+     * importing. A bounds-only pass costs almost nothing and lets the real decode
+     * be subsampled straight to roughly the right size.
+     */
+    private fun decodeCover(bytes: ByteArray): Bitmap? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = android.graphics.BitmapFactory.Options().apply {
+            inSampleSize = coverSampleSize(bounds.outWidth, bounds.outHeight, MAX_DIM)
+        }
+        val decoded = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            ?: return null
+        return scaleDown(decoded)
+    }
+
+    /**
+     * The `inSampleSize` that brings a [srcWidth]x[srcHeight] image within [maxDim]
+     * on its longest side.
+     *
+     * Always a power of two, because that is the only set of factors the decoder
+     * can honour without resampling. Returns 1 when the image already fits.
+     */
+    internal fun coverSampleSize(srcWidth: Int, srcHeight: Int, maxDim: Int): Int {
+        if (srcWidth <= 0 || srcHeight <= 0 || maxDim <= 0) return 1
+        var sample = 1
+        var longest = maxOf(srcWidth, srcHeight)
+        // A power-of-two decoder step; stop at 1 so the loop always terminates even
+        // for a pathological 0-sized or overflowing input.
+        while (longest / 2 >= maxDim && sample < (1 shl 12)) {
+            longest /= 2
+            sample *= 2
+        }
+        return sample
     }
 
     private fun findEpubCoverEntry(zip: ZipFile): java.util.zip.ZipEntry? {
@@ -80,13 +164,13 @@ object CoverExtractor {
         var opfPath = "content.opf"
         var opfDir = ""
         if (container != null) {
-            val xml = zip.getInputStream(container).readBytes().toString(Charsets.UTF_8)
+            val xml = readEntry(zip, container)?.toString(Charsets.UTF_8) ?: ""
             Regex("full-path=\"([^\"]+)\"").find(xml)?.groupValues?.get(1)?.let { opfPath = it }
             opfDir = opfPath.substringBeforeLast('/', "")
         }
         val opf = zip.getEntry(opfPath) ?: return firstImageFallback(zip)
 
-        val text = zip.getInputStream(opf).readBytes().toString(Charsets.UTF_8)
+        val text = readEntry(zip, opf)?.toString(Charsets.UTF_8) ?: ""
         val items = Regex("<item\\b[^>]*>").findAll(text).toList()
 
         fun itemHrefById(id: String): String? =

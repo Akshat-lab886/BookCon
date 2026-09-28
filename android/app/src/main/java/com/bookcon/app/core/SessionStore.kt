@@ -17,19 +17,43 @@ import javax.inject.Singleton
 @Singleton
 class SessionStore @Inject constructor(@ApplicationContext context: Context) {
 
-    private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        "bookcon_secure_prefs",
-        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    private val prefs: SharedPreferences = createPrefs(context)
 
     private val _session = MutableStateFlow(loadSession())
     val session: StateFlow<Session?> = _session
 
     fun current(): Session? = _session.value
 
+    /**
+     * Same call [com.bookcon.app.core.AiKeyStore] already guards: some devices have a
+     * locked or corrupt Keystore and `EncryptedSharedPreferences.create` throws for
+     * them. This class is a @Singleton injected into MainActivity, ApiProvider,
+     * TokenRefresher, AuthRepository, both sync workers and several ViewModels, so an
+     * unguarded throw here escaped the Hilt graph and crashed the app on the first
+     * frame — recoverable only by clearing app data. Degrading to plain prefs means
+     * the user can at least sign in and use the app.
+     */
+    private fun createPrefs(context: Context): SharedPreferences {
+        val secure = runCatching {
+            EncryptedSharedPreferences.create(
+                context,
+                FILE_SECURE,
+                MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }
+        return secure.getOrElse { cause ->
+            android.util.Log.w(TAG, "EncryptedSharedPreferences unavailable; using fallback", cause)
+            context.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)
+        }
+    }
+
+    // commit(), not apply(): a sign-out has to be on disk before this returns. With
+    // apply() the write is still in flight when the process is killed — which is
+    // exactly what happens right after signing out — and the user comes back to a
+    // session they believe they ended. Lint's ApplySharedPref advice is wrong here.
+    @Suppress("ApplySharedPref")
     fun update(session: Session?) {
         // Single transaction: a process death between two edits() could persist
         // a half-written session, which loadSession() must never crash on.
@@ -45,7 +69,6 @@ class SessionStore @Inject constructor(@ApplicationContext context: Context) {
                 putString(KEY_EMAIL, session.email)
             }
         }.commit()
-        android.util.Log.w("BookConAuth", "SessionStore.update rfLen=${session?.refreshToken?.length ?: -1} commitOk")
         _session.value = session
     }
 
@@ -61,7 +84,9 @@ class SessionStore @Inject constructor(@ApplicationContext context: Context) {
         val refresh = prefs.getString(KEY_REFRESH, null)
         if (serverUrl.isNullOrBlank() || access.isNullOrBlank() || refresh.isNullOrBlank()) {
             if (access != null || refresh != null || serverUrl != null) {
-                prefs.edit().clear().apply() // partial write → wipe and force re-login
+                // commit() for the same reason as update(): a partial session must not
+                // survive a process death and get read back as a usable one.
+                prefs.edit().clear().commit() // partial write → wipe and force re-login
             }
             return null
         }
@@ -76,6 +101,9 @@ class SessionStore @Inject constructor(@ApplicationContext context: Context) {
     }
 
     companion object {
+        private const val TAG = "SessionStore"
+        private const val FILE_SECURE = "bookcon_secure_prefs"
+        private const val FILE_FALLBACK = "bookcon_session_fallback"
         private const val KEY_ACCESS = "access_token"
         private const val KEY_REFRESH = "refresh_token"
         private const val KEY_SERVER = "server_url"

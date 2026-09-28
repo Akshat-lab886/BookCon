@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.bookcon.app.data.sync.stageFileAtomically
 
 /** Bottom tabs are filter states within this screen (PRD FR-LIB). */
 enum class LibTab(val label: String) {
@@ -84,6 +85,7 @@ data class LibraryUiState(
     val countByShelf: Map<String, Int> = emptyMap(),
     val countByTag: Map<String, Int> = emptyMap(),
     val countBySeries: Map<String, Int> = emptyMap(),
+    val countByAuthor: Map<String, Int> = emptyMap(),
     // AND-combined client-side filters (fine for v1 per PRD FR-LIB).
     val filterFormats: Set<String> = emptySet(),
     val filterTagId: String? = null,
@@ -97,6 +99,25 @@ data class LibraryUiState(
 sealed interface LibraryEvent {
     data class Snackbar(val text: String) : LibraryEvent
 }
+
+// --- PRD LIB-12 selection transitions ------------------------------------------------
+//
+// Top level so they can be exercised directly. This whole feature was built and
+// unreachable, so it had no test coverage at all; keeping the rules out of the
+// ViewModel means they can be pinned without a Hilt graph.
+
+/** Adds or removes [bookId], exiting selection mode when the last one is removed. */
+internal fun toggleSelect(current: LibraryUiState, bookId: String): LibraryUiState {
+    if (!current.selectionActive) return current
+    val next = if (bookId in current.selectedIds) current.selectedIds - bookId
+    else current.selectedIds + bookId
+    return current.copy(selectedIds = next, selectionActive = next.isNotEmpty())
+}
+
+/** A long press enters selection mode, or toggles the book when already in it. */
+internal fun longPressSelect(current: LibraryUiState, bookId: String): LibraryUiState =
+    if (!current.selectionActive) current.copy(selectionActive = true, selectedIds = setOf(bookId))
+    else toggleSelect(current, bookId)
 
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
@@ -203,6 +224,9 @@ class LibraryViewModel @Inject constructor(
             authors = books.flatMap { it.authors }.distinct().sortedBy(String::lowercase),
             countByShelf = countEach(books) { it.shelfIds },
             countByTag = countEach(books) { it.tagIds },
+            // Counted over the whole library, not the filtered view, so choosing one
+            // author does not make every other author's count read 0.
+            countByAuthor = countEach(books) { it.authors },
             countBySeries = books.groupingBy { it.seriesId.orEmpty() }.eachCount().filterKeys(String::isNotBlank),
         )
     }
@@ -249,15 +273,18 @@ class LibraryViewModel @Inject constructor(
     // --- Selection mode (PRD LIB-12) -------------------------------------------------
 
     fun onLongPress(bookId: String) {
-        _controls.update {
-            when {
-                !it.selectionActive -> it.copy(selectionActive = true, selectedIds = setOf(bookId))
-                else -> {
-                    val next = if (bookId in it.selectedIds) it.selectedIds - bookId else it.selectedIds + bookId
-                    it.copy(selectedIds = next, selectionActive = next.isNotEmpty())
-                }
-            }
-        }
+        _controls.update { longPressSelect(it, bookId) }
+    }
+
+    /**
+     * Selection toggle for an ordinary tap while selection mode is already on.
+     *
+     * The tap path and the long-press path both had to exist: long press enters
+     * selection mode, a plain tap then toggles rather than opening the book, or
+     * there would be no way to adjust a multi-selection at all.
+     */
+    fun toggleSelected(bookId: String) {
+        _controls.update { toggleSelect(it, bookId) }
     }
 
     fun selectAllVisible() = _controls.update {
@@ -325,14 +352,34 @@ class LibraryViewModel @Inject constructor(
         val ids = _controls.value.selectedIds.toList()
         viewModelScope.launch(Dispatchers.IO) {
             var deleted = 0
+            var failed = 0
             for (id in ids) {
                 val book = bookDao.get(id) ?: continue
                 val ok = runCatching { apiProvider.get().deleteBook(id).isSuccessful }.getOrDefault(false)
-                bookDao.upsert(book.copy(deletedAt = nowIso(), dirty = !ok))
-                deleted++
+                if (ok) {
+                    bookDao.upsert(book.copy(deletedAt = nowIso()))
+                    deleted++
+                } else {
+                    // Do NOT tombstone locally when the server refused. Books are
+                    // never pushed, so a local tombstone could never be undone and
+                    // the dirty flag that marked it for retry could never be cleared
+                    // either — which made a delete attempted offline remove the book
+                    // from the device for good while the server still had it.
+                    failed++
+                }
             }
             clearSelection()
-            _events.send(LibraryEvent.Snackbar("Deleted $deleted book${plural(deleted)}"))
+            _events.send(
+                LibraryEvent.Snackbar(
+                    when {
+                        failed == 0 -> "Deleted $deleted book${plural(deleted)}"
+                        deleted == 0 ->
+                            "Couldn't reach the server — $failed book${plural(failed)} not deleted"
+                        else ->
+                            "Deleted $deleted, couldn't delete $failed — try again when online"
+                    },
+                ),
+            )
         }
     }
 
@@ -342,6 +389,7 @@ class LibraryViewModel @Inject constructor(
         if (uris.isEmpty()) return
         viewModelScope.launch(Dispatchers.IO) {
             var queued = 0
+            var failed = 0
             for (uri in uris) {
                 try {
                     runCatching {
@@ -359,9 +407,21 @@ class LibraryViewModel @Inject constructor(
                     // Copy bytes ONCE into staging while streaming the sha256.
                     val digest = MessageDigest.getInstance("SHA-256")
                     var size = 0L
-                    val input = appContext.contentResolver.openInputStream(uri) ?: continue
+                    val input = appContext.contentResolver.openInputStream(uri)
+                    if (input == null) {
+                        // Counted like any other failure. This used to be a bare
+                        // `?: continue`, so a pick the provider could not open
+                        // disappeared with no trace and no mention in the summary.
+                        android.util.Log.w("Library", "no stream for $uri")
+                        failed++
+                        continue
+                    }
                     input.use { stream ->
-                        staging.outputStream().use { out ->
+                        // Staged atomically, for the same reason downloads are: this
+                        // path becomes the book's own localFile, and a copy cut short
+                        // by the process being killed or the stream erroring used to
+                        // leave a truncated file sitting there looking complete.
+                        stageFileAtomically(staging) { out ->
                             val buffer = ByteArray(64 * 1024)
                             while (true) {
                                 val read = stream.read(buffer)
@@ -419,12 +479,25 @@ class LibraryViewModel @Inject constructor(
                         )
                         queued++
                     }
-                } catch (_: Exception) {
-                    // Skip unreadable picks; remaining files still import.
+                } catch (e: Exception) {
+                    // Remaining picks still import, but the failure is counted and
+                    // logged. It used to be `catch (_: Exception)`, so a pick that
+                    // could not be read vanished with no trace and the user was told
+                    // only how many had imported — never that one had not.
+                    android.util.Log.w("Library", "import of $uri failed", e)
+                    failed++
                 }
             }
             if (queued > 0) enqueueUpload(appContext)
-            _events.send(LibraryEvent.Snackbar("$queued book${plural(queued)} importing"))
+            _events.send(
+                LibraryEvent.Snackbar(
+                    when {
+                        failed == 0 -> "$queued book${plural(queued)} importing"
+                        queued == 0 -> "Couldn't import $failed file${plural(failed)}"
+                        else -> "$queued importing, $failed couldn't be read"
+                    },
+                ),
+            )
         }
     }
 

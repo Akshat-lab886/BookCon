@@ -49,6 +49,8 @@ data class AnnotationsUiState(
     val loading: Boolean = true,
     val perBookId: String? = null,
     val items: List<AnnotationItem> = emptyList(),
+    /** How many matched before filtering, so the UI can say "N of M". */
+    val totalCount: Int = 0,
     val availableTags: List<String> = emptyList(),
     val filters: AnnotationFilters = AnnotationFilters(),
 )
@@ -119,6 +121,7 @@ class AnnotationsViewModel @Inject constructor(
             loading = false,
             perBookId = bookId,
             items = sorted,
+            totalCount = withRefs.size,
             availableTags = annotations.flatMap { it.annotationTags }.distinct().sorted(),
             filters = filters,
         )
@@ -151,17 +154,45 @@ class AnnotationsViewModel @Inject constructor(
 
     // --- export ----------------------------------------------------------------------
 
+    /**
+     * Exports the filtered view, but says so in the subject line when it is filtered.
+     *
+     * The old version exported `state.items` — the post-filter list — with no
+     * indication that a filter was active, so with "Color: Yellow" selected the user
+     * shipped 12 of 300 highlights and the count in the subject was the only clue.
+     * The subject now states plainly that the export is a filtered subset.
+     */
     fun export(format: AnnotationsExporter.Format) {
         viewModelScope.launch {
             val snapshot = state.value
             val annotations = snapshot.items.map { it.entity }
             val titles = snapshot.items.associate { it.entity.bookId to it.bookTitle }
             val entries = AnnotationsExporter.buildEntries(annotations, titles)
+            val filters = filtersFlow.value
+            val isFiltered = snapshot.totalCount > snapshot.items.size
+            val filterNote = if (isFiltered) {
+                " — filtered view, ${snapshot.items.size} of ${snapshot.totalCount}" +
+                    (describeFilters(filters)?.let { ", $it" } ?: "")
+            } else {
+                ""
+            }
             val subject = when (val id = snapshot.perBookId) {
-                null -> "BookCon annotations (${entries.size})"
-                else -> "Annotations — ${entries.firstOrNull()?.bookTitle ?: id}"
+                null -> "BookCon annotations (${entries.size})$filterNote"
+                else -> "Annotations — ${entries.firstOrNull()?.bookTitle ?: id}" +
+                    " (${entries.size})$filterNote"
             }
             _events.send(AnnotationsEvent.Share(format, subject, AnnotationsExporter.build(format, entries)))
         }
+    }
+
+    /** Human-readable list of the active filters, for the export subject. */
+    private fun describeFilters(filters: AnnotationFilters): String? {
+        val parts = buildList {
+            if (filters.colors.isNotEmpty()) add("color: ${filters.colors.joinToString(", ")}")
+            if (filters.types.isNotEmpty()) add("type: ${filters.types.joinToString(", ")}")
+            if (filters.tags.isNotEmpty()) add("tag: ${filters.tags.joinToString(", ")}")
+            if (filters.search.isNotBlank()) add("search: \"${filters.search}\"")
+        }
+        return parts.takeIf { it.isNotEmpty() }?.joinToString("; ")
     }
 }

@@ -69,6 +69,7 @@ import androidx.compose.material3.FilterChip
 import com.bookcon.app.ui.components.PillButton
 import java.util.UUID
 import com.bookcon.app.reader.NoteContent
+import com.bookcon.app.ui.theme.BrandColors
 
 private val NOTE_COLORS = listOf("#FACC15", "#F87171", "#4ADE80", "#60A5FA", "#1C1B1F")
 
@@ -101,8 +102,11 @@ fun NotebookSheet(
     var bold by remember { mutableStateOf(false) }
     var italic by remember { mutableStateOf(false) }
     var underline by remember { mutableStateOf(false) }
-    // Text being typed for the newest block.
-    var draft by remember(st.activePage, st.pages) { mutableStateOf("") }
+    // The in-progress text lives in the ViewModel (st.draft) so it survives page
+    // changes and closing/reopening the sheet. Holding it in a `remember` keyed on
+    // st.activePage/st.pages threw it away the moment either changed, while the style
+    // row beside the input displayed "Saved".
+    val draft = st.draft
 
     Surface(
         modifier = modifier
@@ -124,7 +128,9 @@ fun NotebookSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MaterialTheme.colorScheme.primary)
-                    .statusBarsPadding()
+                    // No statusBarsPadding here: the sheet's own container already
+                    // applies it. Applying it twice pushed the header down by two
+                    // status-bar heights.
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -242,9 +248,20 @@ fun NotebookSheet(
                         }
                         Spacer(Modifier.weight(1f))
                         Text(
-                            if (st.saving) "Saving…" else "Saved",
+                            // "Saved" describes the committed blocks. An uncommitted
+                            // draft is NOT saved, and saying so prevents a long note
+                            // from looking safe when it is still only in the box.
+                            when {
+                                st.saving -> "Saving…"
+                                draft.isNotBlank() -> "Draft not added yet"
+                                else -> "Saved"
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (draft.isNotBlank() && !st.saving) {
+                                BrandColors.Salmon
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                         )
                     }
                     Row(
@@ -255,7 +272,7 @@ fun NotebookSheet(
                     ) {
                         OutlinedTextField(
                             value = draft,
-                            onValueChange = { draft = it },
+                            onValueChange = viewModel::setNotebookDraft,
                             placeholder = { Text("Type a note…") },
                             modifier = Modifier.weight(1f),
                             minLines = 1,
@@ -273,7 +290,7 @@ fun NotebookSheet(
                                         underline = underline,
                                     )
                                     viewModel.saveNotebookContent(st.content.copy(blocks = st.content.blocks + block))
-                                    draft = ""
+                                    viewModel.clearNotebookDraft()
                                 }
                             },
                             modifier = Modifier.padding(start = 8.dp),

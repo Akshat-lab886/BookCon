@@ -3,6 +3,9 @@ package com.bookcon.app.core
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -29,28 +32,70 @@ class ReadingTracker(context: Context) {
     @Volatile
     private var cacheTotal: Int = 0
 
-    fun logMinute(bookId: String) {
-        try {
-            if (cacheDate != todayKey) {
-                cacheDate = todayKey
-                cacheTotal = readAll().optJSONObject(todayKey)?.optInt("total", 0) ?: 0
-            }
-            cacheTotal += 1
-            val all = readAll()
-            val day = all.optJSONObject(todayKey) ?: JSONObject().also { all.put(todayKey, it) }
-            day.put("total", day.optInt("total", 0) + 1)
-            val books = day.optJSONObject("books") ?: JSONObject().also { day.put("books", it) }
-            books.put(bookId, books.optInt(bookId, 0) + 1)
+    /**
+     * Serialises read-modify-write, matching VocabStore.mutate.
+     *
+     * The previous version did `readAll()` then incremented and wrote with no lock, so
+     * two overlapping minute ticks both read the same totals and one increment was
+     * lost — reading time silently under-counted.
+     */
+    private val logMutex = Mutex()
 
-            dir.mkdirs()
-            val tmp = File(dir, "daily.json.tmp")
-            tmp.writeText(all.toString())
-            if (!tmp.renameTo(file)) {
-                file.delete()
-                tmp.renameTo(file)
+    fun logMinute(bookId: String) {
+        runBlocking {
+            logMutex.withLock {
+                try {
+                    if (cacheDate != todayKey) {
+                        cacheDate = todayKey
+                        cacheTotal = readAll().optJSONObject(todayKey)?.optInt("total", 0) ?: 0
+                    }
+                    cacheTotal += 1
+                    val all = readAll()
+                    val day = all.optJSONObject(todayKey) ?: JSONObject().also { all.put(todayKey, it) }
+                    day.put("total", day.optInt("total", 0) + 1)
+                    val books = day.optJSONObject("books") ?: JSONObject().also { day.put("books", it) }
+                    books.put(bookId, books.optInt(bookId, 0) + 1)
+
+                    dir.mkdirs()
+                    // Write to a temp file, then replace. The old fallback deleted the
+                    // live file first and retried the rename — if that second rename
+                    // also failed, daily.json was already gone and with it every day,
+                    // the streak and the goal since install. VocabStore.writeAtomic
+                    // documents exactly why that pattern is unsafe. Here the original
+                    // is only removed once the replacement is known to be in place, and
+                    // if the replacement cannot be made at all the original is kept.
+                    val tmp = File(dir, "daily.json.tmp")
+                    tmp.writeText(all.toString())
+                    if (!tmp.renameTo(file)) {
+                        // Rename within the same directory usually fails only on some
+                        // filesystems when the target exists; copy across, keeping the
+                        // original until the copy has fully succeeded.
+                        //
+                        // The copy itself goes through the shared atomic stager rather
+                        // than `file.outputStream()`. That call truncates the target the
+                        // instant it is opened, so a copy that died halfway left
+                        // daily.json truncated — while the code below reported "kept the
+                        // original" and the comment above promised exactly the opposite.
+                        // The bytes are in `tmp`, so there is no reason to stream them
+                        // into a file that is already being destroyed.
+                        val copied = runCatching {
+                            tmp.inputStream().use { input ->
+                                com.bookcon.app.data.sync.stageFileAtomically(file) { out ->
+                                    input.copyTo(out)
+                                }
+                            }
+                            true
+                        }.getOrDefault(false)
+                        runCatching { tmp.delete() }
+                        if (!copied) {
+                            // Original is still intact; leave it alone.
+                            Log.w(TAG, "logMinute could not replace daily.json; kept the original")
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "logMinute failed", t)
+                }
             }
-        } catch (t: Throwable) {
-            Log.w(TAG, "logMinute failed", t)
         }
     }
 

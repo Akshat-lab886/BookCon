@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Everything secret is excluded.
+
+  The Keystore-backed files are excluded because a Keystore key does not travel with
+  the backup: restoring an encrypted blob whose key is missing yields garbage, and the
+  tokens inside are useless on the new device anyway — the user signs in again.
+
+  The *_fallback files are excluded because they are PLAINTEXT. They only come into
+  use when a device's Keystore is unavailable, and on such a device they hold the AI
+  API key and the session tokens in the clear, which would otherwise be uploaded into
+  the user's Google backup / device-transfer bundle.
+-->
 <full-backup-content>
-    <!-- Tokens are Keystore-encrypted; never back up raw key material. -->
     <exclude domain="sharedpref" path="bookcon_secure_prefs.xml" />
+    <exclude domain="sharedpref" path="bookcon_ai_fallback.xml" />
+    <exclude domain="sharedpref" path="bookcon_ai_secure.xml" />
+    <exclude domain="sharedpref" path="bookcon_session_fallback.xml" />
 </full-backup-content>

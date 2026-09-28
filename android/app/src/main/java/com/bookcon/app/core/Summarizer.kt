@@ -51,6 +51,11 @@ class Summarizer {
                     val request = buildOpenAiRequest("$base/chat/completions", key, effectiveModel, userPrompt)
                     parseOpenAi(execute(request))
                 }
+                PROVIDER_ANTHROPIC -> {
+                    val base = normalizedBaseUrl(provider, baseUrl)
+                    val request = buildAnthropicRequest("$base/v1/messages", key, effectiveModel, userPrompt)
+                    parseAnthropic(execute(request))
+                }
                 PROVIDER_CUSTOM -> {
                     // The one documented throw: surfaces as Result.failure(IllegalArgumentException).
                     val base = normalizedBaseUrl(provider, baseUrl)
@@ -103,6 +108,91 @@ class Summarizer {
             .header("Authorization", "Bearer $apiKey")
             .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
+    }
+
+    /**
+     * Anthropic's Messages API.
+     *
+     * It was offered in the settings chips but had no implementation, so selecting it
+     * made every AI call fail with "Unsupported AI provider: anthropic" and silently
+     * killed page summarization and the whole voice assistant for that setting. It is
+     * not OpenAI-compatible: the credential goes in `x-api-key`, the version is
+     * pinned in `anthropic-version`, there is no "system" message role (it is a
+     * top-level `system` field), and the reply is under `content[].text`.
+     */
+    private fun buildAnthropicRequest(
+        url: String,
+        apiKey: String,
+        model: String,
+        userPrompt: String,
+    ): Request {
+        val body = JSONObject().apply {
+            put("model", model)
+            put("system", SYSTEM_PROMPT)
+            put(
+                "messages",
+                JSONArray().put(JSONObject().put("role", "user").put("content", userPrompt)),
+            )
+            put("temperature", 0.3)
+            put("max_tokens", 500)
+        }
+        return Request.Builder()
+            .url(url)
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+    }
+
+    /** Anthropic chat: same wire format, with a multi-turn message array. */
+    private fun buildAnthropicChatRequest(
+        url: String,
+        apiKey: String,
+        model: String,
+        messages: List<ChatMessage>,
+        systemPrompt: String,
+    ): Request {
+        val body = JSONObject().apply {
+            put("model", model)
+            put("system", systemPrompt)
+            put(
+                "messages",
+                JSONArray().apply {
+                    for (m in messages) {
+                        if (m.role == "system") continue // carried in the top-level field
+                        put(JSONObject().put("role", m.role).put("content", m.content))
+                    }
+                },
+            )
+            put("max_tokens", 700)
+        }
+        return Request.Builder()
+            .url(url)
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+    }
+
+    /** Concatenates the `text` blocks of an Anthropic content array. */
+    private fun parseAnthropic(body: String): String {
+        val json = JSONObject(body)
+        json.optJSONArray("error")?.let { err ->
+            val message = err.optJSONObject(0)?.optString("message")
+            if (!message.isNullOrBlank()) throw IllegalStateException(message)
+        }
+        val content = json.optJSONArray("content")
+            ?: throw IllegalStateException("Anthropic returned no content")
+        val sb = StringBuilder()
+        for (i in 0 until content.length()) {
+            val block = content.optJSONObject(i) ?: continue
+            if (block.optString("type") == "text") {
+                if (sb.isNotEmpty()) sb.append("\n\n")
+                sb.append(block.optString("text"))
+            }
+        }
+        if (sb.isEmpty()) throw IllegalStateException("Anthropic returned an empty response")
+        return sb.toString()
     }
 
     private fun buildGeminiRequest(
@@ -225,6 +315,15 @@ class Summarizer {
                     val request = buildChatRequest(base, key, effectiveModel, messages)
                     parseOpenAiChat(execute(request))
                 }
+                PROVIDER_ANTHROPIC -> {
+                    // Anthropic needs its own transport, so the whole voice
+                    // assistant was dead for this provider before.
+                    val base = normalizedBaseUrl(provider, baseUrl)
+                    val request = buildAnthropicChatRequest(
+                        "$base/v1/messages", key, effectiveModel, messages, systemPrompt,
+                    )
+                    parseAnthropic(execute(request))
+                }
                 else -> throw IllegalArgumentException("Unsupported AI provider: $provider")
             }
             Result.success(text)
@@ -320,10 +419,12 @@ class Summarizer {
         const val PROVIDER_GEMINI = "gemini"
         const val PROVIDER_GROQ = "groq"
         const val PROVIDER_CUSTOM = "custom"
+        const val PROVIDER_ANTHROPIC = "anthropic"
 
         private const val OPENAI_BASE = "https://api.openai.com/v1"
         private const val GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
         private const val GROQ_BASE = "https://api.groq.com/openai/v1"
+        private const val ANTHROPIC_BASE = "https://api.anthropic.com"
 
         private const val SYSTEM_PROMPT = "You are a concise reading assistant. Summarize book pages faithfully."
         private const val NETWORK_ERROR = "Network error: check your internet connection"
@@ -338,6 +439,7 @@ class Summarizer {
             PROVIDER_OPENAI -> "gpt-4o-mini"
             PROVIDER_GEMINI -> "gemini-1.5-flash"
             PROVIDER_GROQ -> "llama-3.3-70b-versatile"
+            PROVIDER_ANTHROPIC -> "claude-3-5-haiku-latest"
             else -> ""
         }
 
@@ -353,6 +455,7 @@ class Summarizer {
                 PROVIDER_OPENAI -> trimmed.ifBlank { OPENAI_BASE }
                 PROVIDER_GEMINI -> GEMINI_BASE
                 PROVIDER_GROQ -> trimmed.ifBlank { GROQ_BASE }
+                PROVIDER_ANTHROPIC -> trimmed.ifBlank { ANTHROPIC_BASE }
                 else -> trimmed
             }
         }

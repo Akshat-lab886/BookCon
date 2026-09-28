@@ -28,7 +28,12 @@ object DataModule {
     fun provideDatabase(@ApplicationContext context: Context): BookConDatabase =
         Room.databaseBuilder(context, BookConDatabase::class.java, BookConDatabase.NAME)
             .addMigrations(BookConDatabase.MIGRATION_1_2)
-            .fallbackToDestructiveMigration()
+            // No destructive fallback. With it, any future version bump that ships
+            // without a matching Migration silently DROPS every table — books,
+            // annotations, bookmarks, reading positions, notebooks, notes and the
+            // pending upload queue. In Local Vault mode there is no server copy to
+            // re-pull from, so that is unrecoverable. Letting Room throw turns a
+            // silent data-loss bug into a loud, testable one.
             .build()
 
     @Provides fun bookDao(db: BookConDatabase): BookDao = db.bookDao()

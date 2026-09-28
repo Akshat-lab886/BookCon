@@ -37,6 +37,87 @@ import org.readium.r2.shared.util.format.FormatHints
 import org.readium.r2.shared.util.http.DefaultHttpClient
 import org.readium.r2.streamer.PublicationOpener
 import org.readium.r2.streamer.parser.DefaultPublicationParser
+import kotlinx.coroutines.withContext
+
+/**
+ * Flattens an XHTML resource to the text a reader would actually see.
+ *
+ * Dropping tags alone is not enough: the *contents* of `<style>` and `<script>`
+ * are text too, so a chapter with an embedded stylesheet used to yield its CSS
+ * declarations as page content. That went straight into AI prompts (making
+ * summaries drift toward markup) and, worse, into read-aloud, where the
+ * narrator would speak stylesheet rules out loud. Comments leaked the same way.
+ *
+ * Elements are removed with their contents first, then whatever tags remain are
+ * dropped. Entities are decoded only after that, so an escaped `&lt;script&gt;`
+ * in the prose stays text instead of turning into a tag.
+ */
+internal fun xhtmlToPlainText(raw: String): String =
+    TAG.replace(NON_CONTENT.replace(raw, " "), " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace(WS, " ")
+        .trim()
+
+private val NON_CONTENT = Regex(
+    // <script>/<style> blocks including their bodies, plus HTML comments.
+    // DOT_MATCHES_ALL matters: a stylesheet routinely spans many lines.
+    "<!--.*?-->|<(script|style)\\b[^>]*>.*?</\\s*\\1\\s*>",
+    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+)
+
+private val TAG = Regex("<[^>]*>")
+
+private val WS = Regex("\\s+")
+
+/** One search hit inside a single resource. */
+internal data class TextMatch(val excerpt: String, val progression: Float)
+
+/**
+ * Case-insensitive substring search over one resource's plain text.
+ *
+ * Pure so it can be tested without a publication, and deliberately literal rather
+ * than word-based: a reader searching a book expects to find the phrase they typed
+ * — including inside a word or across punctuation — which is what `indexOf` gives.
+ * The text arrives already whitespace-collapsed from [xhtmlToPlainText], so the
+ * excerpts read as continuous prose.
+ *
+ * [TextMatch.progression] is the offset of the hit as a fraction of the resource,
+ * which is what a locator needs to land in roughly the right place: an EPUB has no
+ * page grid to index into.
+ */
+internal fun findTextMatches(
+    query: String,
+    text: String,
+    excerptRadius: Int = 70,
+    maxMatches: Int = 50,
+): List<TextMatch> {
+    val needle = query.trim()
+    if (needle.isEmpty() || text.isEmpty()) return emptyList()
+    val out = mutableListOf<TextMatch>()
+    var index = text.indexOf(needle, 0, ignoreCase = true)
+    while (index >= 0 && out.size < maxMatches) {
+        val start = (index - excerptRadius).coerceAtLeast(0)
+        val end = (index + needle.length + excerptRadius).coerceAtMost(text.length)
+        val excerpt = buildString {
+            if (start > 0) append('…')
+            append(text.substring(start, end).trim())
+            if (end < text.length) append('…')
+        }
+        out += TextMatch(
+            excerpt = excerpt,
+            // Anchored on the middle of the hit, not its start, so a long phrase does
+            // not drop the reader a screen before the match.
+            progression = ((index + needle.length / 2.0) / text.length).coerceIn(0.0, 1.0).toFloat(),
+        )
+        // Resume past the match, or a repeated word loops on its own opening.
+        index = text.indexOf(needle, index + needle.length, ignoreCase = true)
+    }
+    return out
+}
 
 /**
  * Thin seam over the Readium toolkit (TRD risk mitigation): every direct Readium call lives in
@@ -63,11 +144,23 @@ data class EngineSettings(
     val paragraphSpacing: Float? = null,   // no direct toolkit equivalent (mapped to wordSpacing)
     val letterSpacing: Float? = null,
     val textAlign: String? = null,         // start | center | end | justify
-    val publisherDefaults: Boolean? = null,// RD-6 (not exposed by toolkit preferences; reserved)
+    val publisherDefaults: Boolean? = null,// RD-6 -> Readium's `publisherStyles`
     val paginated: Boolean? = null,        // true → paginated, false → scroll
     val theme: String? = null,             // light | sepia | dark | black
-    val pageMargins: Float? = null,        // reserved (toolkit pageMargins pref is a Boolean)
+    /** Page margin as the settings slider presents it, in dp. */
+    val marginHorizontalDp: Float? = null,
 )
+
+/**
+ * Readium expresses page margins as a percentage of the column, while the reader
+ * setting is a dp slider. Converting against a reference column keeps the slider
+ * feeling linear without needing the live viewport, which the engine does not have
+ * when preferences are submitted.
+ */
+private const val REFERENCE_WIDTH_DP = 411.0
+
+private fun dpToPercent(dp: Float, referenceDp: Double): Double =
+    (dp.toDouble() / referenceDp * 100.0).coerceIn(0.0, 20.0)
 
 /** Text currently selected inside the reading surface (ANN-1). */
 data class EngineSelection(
@@ -79,6 +172,15 @@ data class EngineSelection(
 data class EngineSearchHit(
     val locator: Locator,
     val excerpt: String,
+    /**
+     * 0-based PDF page, for formats with no navigator to `go()` into.
+     *
+     * `openPdf` clears the engine because the toolkit ships no PDF navigator at
+     * 3.1.0, so a PDF hit cannot be jumped to with a Locator — the pager is driven
+     * by the ViewModel's pdfTurnRequest instead. Null for EPUB, where the locator
+     * is authoritative.
+     */
+    val pdfPage: Int? = null,
 )
 
 /**
@@ -107,8 +209,9 @@ interface ReaderEngine {
     suspend fun previous(): Boolean
 
     /**
-     * Full-text search (RD-11). Default returns no hits until the toolkit Search API is wired —
-     * see [EpubReaderEngine.search].
+     * Full-text search (RD-11). [EpubReaderEngine] implements this; the default
+     * returns no hits, which is the current behaviour for PDF and comics because
+     * their page text lives outside the engine (PDF's in [com.bookcon.app.reader.PdfBook]).
      */
     suspend fun search(query: String): List<EngineSearchHit> = emptyList()
 
@@ -118,6 +221,17 @@ interface ReaderEngine {
 
     /** Returns (pageLabel, plainText) for the currently visible page, or null. */
     fun currentPageText(): Pair<String, String>? = null
+
+    /**
+     * Text for read-aloud, as (label, fullText, charOffsetOfVisibleText).
+     *
+     * Distinct from [currentPageText] on purpose. That one is a *prompt* for the AI
+     * summariser and is happy with a bounded window. Narration is not: it needs the
+     * whole resource plus the offset of what is actually on screen, so it can carry
+     * on from where it stopped instead of restarting. Default null for formats with
+     * no notion of a continuous resource (PDF pages the caller handles itself).
+     */
+    fun narrationText(): Triple<String, String, Int>? = null
 
     fun applySettings(settings: EngineSettings) {}
 
@@ -238,6 +352,8 @@ abstract class CommonNavigatorEngine(
     /** Returns (pageLabel, plainText) for the currently visible page, or null. */
     override fun currentPageText(): Pair<String, String>? = null
 
+    override fun narrationText(): Triple<String, String, Int>? = null
+
     // Readium 3.1.0: Navigator.go(Locator, animated): Boolean and
     // OverflowableNavigator.goForward/goBackward(animated): Boolean — plain, non-suspend.
     override suspend fun go(locator: Locator, animated: Boolean): Boolean = try {
@@ -273,7 +389,31 @@ abstract class CommonNavigatorEngine(
         } catch (_: IllegalStateException) {
             Log.w(ReaderEngine.TAG, "Navigator fragment already detached; skipped removal")
         }
+        // Nobody else closes the Publication. Verified against the 3.1.0 AAR: neither
+        // EpubNavigatorFragment (it declares no onDestroy/onDetach) nor
+        // EpubNavigatorViewModel (no onCleared) touches it, and `Publication.close()`
+        // is what releases the container and the underlying file descriptor. Without
+        // this, every EPUB opened left an archive container open.
+        runCatching { publicationRef?.close() }
+            .onFailure { Log.w(ReaderEngine.TAG, "Publication close failed", it) }
         engineScope.cancel()
+    }
+
+    /** Set by the EPUB engine so close() can release the container it owns. */
+    internal var publicationRef: Publication? = null
+
+    companion object {
+        /** How long flushPendingSettings waits for the fragment to attach. */
+        const val SETTINGS_ATTACH_TIMEOUT_MS = 5_000L
+
+        /**
+         * Ceiling on hits returned by an in-book search.
+         *
+         * Every hit costs a read and parse of its resource, and a common word in a
+         * long book matches thousands of times. Rendering an unbounded list would
+         * stall the search panel before the user could scroll it.
+         */
+        const val MAX_SEARCH_HITS = 200
     }
 }
 
@@ -450,8 +590,14 @@ class EpubReaderEngine internal constructor(
         }
     }
 
-    override fun currentPageText(): Pair<String, String>? {
-        val locator = currentLocator.value
+
+    /**
+     * Full plain text of the reading-order resource the reader is on, plus the href.
+     *
+     * [currentPageText] windows this down for AI prompts; narration needs all of it so
+     * it can continue rather than restart.
+     */
+    private fun resourceTextFor(locator: org.readium.r2.shared.publication.Locator): Pair<String, String>? {
         val hrefKey = locator.href.toString().substringBefore('#')
         val link = openedPublication.readingOrder.firstOrNull {
             it.href.toString().substringBefore('#') == hrefKey
@@ -478,16 +624,8 @@ class EpubReaderEngine internal constructor(
         }
         if (raw.isEmpty()) return null
 
-        // XHTML → rough plain text: strip tags, decode the common entities, collapse space.
-        val text = String(raw, Charsets.UTF_8)
-            .let { Regex("<[^>]*>").replace(it, " ") }
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace(Regex("\\s+"), " ")
-            .trim()
+        // XHTML → rough plain text.
+        val text = xhtmlToPlainText(String(raw, Charsets.UTF_8))
         if (text.isEmpty()) return null
 
         // Long resources feed only a window around the visible progression so prompts stay bounded.
@@ -507,10 +645,76 @@ class EpubReaderEngine internal constructor(
         return label to window
     }
 
+    override fun narrationText(): Triple<String, String, Int>? {
+        val locator = currentLocator.value
+        val (hrefKey, text) = resourceTextFor(locator) ?: return null
+        if (text.isEmpty()) return null
+        // Where the visible text begins inside the resource. Readium gives this as a
+        // proportion of the resource, which is what the text window is derived from.
+        val progression = locator.locations.progression
+        val offset = if (progression != null && progression in 0.0..1.0) {
+            ((text.length * progression).toInt()).coerceIn(0, text.length)
+        } else {
+            0
+        }
+        val label = locator.title ?: hrefKey.substringAfterLast('/')
+        return Triple(label, text, offset)
+    }
+
     override suspend fun search(query: String): List<EngineSearchHit> {
-        // TODO(readium-api): wire the toolkit search service here (org.readium.r2.shared.search
-        // Searchable on the publication services). The UI already renders grouped hits.
-        return emptyList()
+        val needle = query.trim()
+        if (needle.isEmpty()) return emptyList()
+        val publication = openedPublication ?: return emptyList()
+
+        // The caller is a plain viewModelScope launch, i.e. the main thread. Reading
+        // and parsing every chapter is far too slow to do there, and the runBlocking
+        // bridge inside plainTextOf would block the UI for the whole search.
+        return withContext(kotlinx.coroutines.Dispatchers.IO) {
+            // The toolkit's SearchService is not wired, so this searched nothing at
+            // all and every in-book search came back empty — the grouping and
+            // jump-to-hit UI was already built and simply never had hits to show.
+            val hits = mutableListOf<EngineSearchHit>()
+            for (link in publication.readingOrder) {
+                if (hits.size >= MAX_SEARCH_HITS) break
+                val href = link.href.toString().substringBefore('#')
+                val text = plainTextOf(href) ?: continue
+                if (text.isBlank()) continue
+                val title = link.title
+                for (match in findTextMatches(needle, text)) {
+                    val locator = Locators.forHref(href, title, match.progression.toDouble())
+                        ?: continue
+                    hits += EngineSearchHit(locator, match.excerpt)
+                    if (hits.size >= MAX_SEARCH_HITS) break
+                }
+            }
+            hits
+        }
+    }
+
+    /**
+     * Plain text of a reading-order resource, or null when it cannot be read.
+     *
+     * The Resource API is suspend-only; search runs on Dispatchers.IO (the same
+     * assumption [resourceTextFor] already makes), so the call is bridged the same
+     * way. Resource is Readium's own Closeable, so it is closed on every path.
+     */
+    private fun plainTextOf(hrefKey: String): String? {
+        val link = openedPublication?.readingOrder?.firstOrNull {
+            it.href.toString().substringBefore('#') == hrefKey
+        } ?: return null
+        val resource = openedPublication?.get(link) ?: return null
+        val raw = kotlinx.coroutines.runBlocking {
+            try {
+                runCatching {
+                    val length = resource.length().getOrNull() ?: return@runCatching ByteArray(0)
+                    if (length <= 0L) ByteArray(0) else resource.read(0 until length).getOrNull() ?: ByteArray(0)
+                }.getOrDefault(ByteArray(0))
+            } finally {
+                runCatching { resource.close() }
+            }
+        }
+        if (raw.isEmpty()) return null
+        return xhtmlToPlainText(String(raw, Charsets.UTF_8)).takeIf { it.isNotEmpty() }
     }
 
     override fun clearSelection() {
@@ -522,21 +726,35 @@ class EpubReaderEngine internal constructor(
     }
 
     override fun applySettings(settings: EngineSettings) {
-        // EpubPreferences (3.1.0) exposes: color, columnCount, fontFamily, fontSize, fontWeight,
-        // hyphens, imageFilter, language, letterSpacing, ligatures, lineHeight, marginHorizontal,
-        // marginBottom, marginVertical, pageMargins(Boolean), readingProgression, scroll, spread,
-        // textAlign, textColor, textNormalization, theme, typeScale, wordSpacing.
-        // Readium 3.1.0 validates EpubPreferences in its constructor (require()):
-        // fontSize >= 0, fontWeight in 0..2.5 as a MULTIPLIER of the base weight
-        // (not CSS 100-900!), letterSpacing/wordSpacing/pageMargins >= 0. Sanitize
-        // every value so a stored CSS-style setting can never throw here.
+        // EpubPreferences 3.1.0 (verified against the AAR signatures) exposes:
+        // backgroundColor, columnCount, fontFamily, fontSize, fontWeight, hyphens,
+        // imageFilter, language, letterSpacing, ligatures, lineHeight, pageMargins,
+        // paragraphIndent, paragraphSpacing, publisherStyles, readingProgression,
+        // scroll, spread, textAlign, textColor, textNormalization, theme, typeScale,
+        // verticalText, wordSpacing.
+        //
+        // It validates in its constructor (require()): fontSize >= 0, fontWeight in
+        // 0..2.5 as a MULTIPLIER of the base weight (not CSS 100-900!), and
+        // letterSpacing/wordSpacing/pageMargins/paragraphSpacing >= 0. Every value is
+        // sanitised so a stale or out-of-range stored setting can never throw here.
         val prefs = EpubPreferences(
+            // RD-6: honour the publication's own stylesheet when asked.
+            publisherStyles = settings.publisherDefaults,
+            // Readium expresses page margins as a percentage of the column width,
+            // while the reader setting is a dp slider, so convert against a
+            // reference column. This field was previously left unset: the settings
+            // computed a "pageMargins" multiplier that no preference ever read, so
+            // the margin sliders did nothing.
+            pageMargins = settings.marginHorizontalDp?.let { dpToPercent(it, REFERENCE_WIDTH_DP) },
+            // The "Paragraph spacing" slider was being written into `wordSpacing`,
+            // which stretched the spaces inside every word. Readium has a real
+            // paragraphSpacing preference; use it.
+            paragraphSpacing = settings.paragraphSpacing?.toDouble()?.coerceAtLeast(0.0),
             fontFamily = settings.fontFamily?.let { FontFamily(it) },
             fontSize = settings.fontSizeSp?.let { (it / ReaderEngine.BASE_FONT_SIZE_SP).toDouble().coerceAtLeast(0.0) },
             fontWeight = settings.fontWeight?.let { (it.toDouble() / 400.0).coerceIn(0.5, 2.5) },
             lineHeight = settings.lineHeight?.toDouble()?.coerceAtLeast(1.0),
             letterSpacing = settings.letterSpacing?.toDouble()?.coerceAtLeast(0.0),
-            wordSpacing = settings.paragraphSpacing?.toDouble()?.coerceAtLeast(0.0),
             scroll = settings.paginated?.not(),
             textAlign = settings.textAlign?.let { readiumTextAlign(it) },
             theme = settings.theme?.let { readiumTheme(it) },
@@ -554,7 +772,21 @@ class EpubReaderEngine internal constructor(
     override fun flushPendingSettings() {
         if (pendingPreferences == null) return
         engineScope.launch {
-            while (!fragment.isAdded && isActive) delay(50)
+            // Bounded wait. The old loop had no timeout, so if the host was never a
+            // FragmentActivity the navigator bailed to UnsupportedHostCard, the
+            // fragment never attached, and this coroutine polled every 50 ms until
+            // close() — which onCleared usually never reached. A 5s ceiling lets the
+            // deferred preferences apply on a slow first frame while guaranteeing the
+            // loop ends.
+            val deadline = System.currentTimeMillis() + SETTINGS_ATTACH_TIMEOUT_MS
+            while (!fragment.isAdded && isActive) {
+                if (System.currentTimeMillis() > deadline) {
+                    Log.w(ReaderEngine.TAG, "Navigator never attached; dropping deferred settings")
+                    return@launch
+                }
+                delay(50)
+            }
+            if (!isActive || !fragment.isAdded) return@launch
             pendingPreferences?.let { prefs ->
                 runCatching { fragment.submitPreferences(prefs) }
                     .onFailure { Log.w(ReaderEngine.TAG, "Deferred applySettings failed", it) }
@@ -647,21 +879,28 @@ object ReaderEngineFactory {
             publication.conformsTo(Publication.Profile.EPUB) -> {
                 val fragment = createEpubFragment(appContext, publication, initialLocator)
                 EpubReaderEngine(fragment, publication, scope).apply {
+                    publicationRef = publication
                     settings?.let { applySettings(it) }
                 }
             }
 
-            publication.conformsTo(Publication.Profile.PDF) ->
+            // These branches opened a Publication above and then bail, so each one
+            // has to release it or the container leaks on every failed open.
+            publication.conformsTo(Publication.Profile.PDF) -> {
+                runCatching { publication.close() }
                 throw ReaderOpenException(
                     "PDF reading is not available in this build (readium-navigator-pdf artifact " +
                         "does not exist for toolkit 3.1.0).",
                 )
+            }
 
-            else ->
+            else -> {
+                runCatching { publication.close() }
                 throw ReaderOpenException(
                     "${publicationFile.extension.ifBlank { "cbz" }} reading is not available in " +
                         "this build (readium-navigator-image artifact does not exist for 3.1.0).",
                 )
+            }
         }
     }
 
@@ -714,6 +953,9 @@ object ReaderEngineFactory {
  */
 object Locators {
 
+        /** EPUB reading-order resources are XHTML; Readium needs a parseable media type. */
+        const val XHTML_MEDIA_TYPE = "application/xhtml+xml"
+
     private val json = Json { ignoreUnknownKeys = true }
 
     fun toJsonString(locator: Locator): String? = try {
@@ -742,12 +984,20 @@ object Locators {
     /**
      * Minimal locator for href jumps (TOC entries, chapter groups) built through the stable
      * JSONObject round-trip so we do not depend on the Href-vs-String href type migration.
+     *
+     * The media type is required. Readium 3.1.0's `Locator.fromJSON` bails with
+     * "[href] and [type] are required" and "[type] is not a valid media type" when it
+     * is absent — verified against the AAR bytecode. This used to omit it, so it
+     * returned null for every href, `jumpToHref` hit its `?: return`, and tapping any
+     * chapter in the table of contents did nothing at all. EPUB reading-order
+     * resources are XHTML, so that is the type to declare.
      */
     fun forHref(href: String, title: String? = null, totalProgression: Double? = null): Locator? = try {
         val locations = JSONObject()
         totalProgression?.let { locations.put("totalProgression", it) }
         val obj = JSONObject()
             .put("href", href)
+            .put("type", XHTML_MEDIA_TYPE)
         title?.let { obj.put("title", it) }
         obj.put("locations", locations)
         Locator.fromJSON(obj)
@@ -764,18 +1014,10 @@ object Locators {
         null
     }
 
-    /** Convenience for progress bookkeeping. */
-    fun progressionOf(locator: Locator): Double? = locator.locations.totalProgression
-
     /** Normalizes hrefs for equality checks (strip fragments/query, case-insensitive tail). */
     fun normalizeHref(href: String?): String? = href
         ?.substringBefore('#')
         ?.substringBefore('?')
         ?.trim()
         ?.lowercase()
-
-    /** Positions helper kept next to serialization for symmetry. */
-    fun withProgression(locator: Locator, progression: Double): Locator = locator.copy(
-        locations = Locator.Locations(progression = progression),
-    )
 }

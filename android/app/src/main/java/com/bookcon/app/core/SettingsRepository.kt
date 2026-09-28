@@ -43,7 +43,7 @@ data class AppSettings(
     val readerFontWeight: Float = 400f,
     val readerLetterSpacing: Float = 0f,
     val readerTextAlignment: String = "justify", // start | center | end | justify
-    val readerPublisherDefaults: Boolean = false, // RD-6 publisher default override
+    val readerPublisherDefaults: Boolean = false, // RD-6 -> Readium publisherStyles
     val readerLineHeight: Float = 1.5f,
     val readerParagraphSpacing: Float = 0.6f,
     val readerMarginsHorizontal: Float = 24f,
@@ -177,7 +177,13 @@ class SettingsRepository @Inject constructor(@ApplicationContext context: Contex
     /** Epoch millis of the last completed pull sync; "never" when null. */
     val lastSyncedAt: Flow<Long?> = context.dataStore.data.map { prefs -> prefs[keyLastSyncedAt] }
 
-    /** Called when a pull sync completes (force-sync path here; TODO(PullWorker): wire it too). */
+    /**
+     * Called by PullWorker when a pull sync actually completes.
+     *
+     * Deliberately not called on the force-sync path: that only enqueues the work,
+     * which then waits behind a CONNECTED network constraint, so stamping there
+     * showed "just now" for a sync that had not run yet.
+     */
     suspend fun setLastSyncedAt(epochMillis: Long) {
         store.edit { it[keyLastSyncedAt] = epochMillis }
     }

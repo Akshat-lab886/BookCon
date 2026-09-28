@@ -45,6 +45,36 @@ content-addressed dedupe, EPUB/PDF/CBZ metadata + WebP thumbnails (in-process
 worker), tombstoned LWW sync (`/sync/pull`, `/sync/push`), Prometheus
 `/metrics` + JSON logs.
 
+## Web client
+
+A single-page web client ships with the API — no build step, no npm install.
+It is served from the same process:
+
+```
+http://localhost:8000/app        # the app  (also /ui, which redirects)
+http://localhost:8000/static/    # app.css + app.js
+```
+
+It shares the dark theme with the Android client (`#0d1117` surfaces, `#00c853`
+selected-nav accent, `#ff6b35` import accent) and talks only to `/api/v1`, so
+every visible control is backed by a working endpoint:
+
+| Surface | Backed by |
+|---|---|
+| Auth (sign in / sign up / sign out) | `POST /auth/register`, `/auth/login`, `/auth/logout` |
+| Home — stats, continue reading, recently added | `GET /books`, `GET /positions?book_ids=…` |
+| Books — search, format chips, sort, grid | `GET /books?q=&format=&sort=` |
+| Import (EPUB/PDF/CBZ/CBR) | `POST /books/initiate-upload` → `PUT /books/{id}/file` → `POST /books/{id}/complete-upload` |
+| Book detail — metadata, download, delete | `GET /books/{id}`, `GET /books/{id}/file-url`, `DELETE /books/{id}` |
+| Bookmarks — list, open, delete | `GET/DELETE /bookmarks` |
+| Profile — display name, library counts, devices, revoke | `PATCH /me`, `GET /books`, `/shelves`, `/tags`, `/devices`, `DELETE /devices/{id}` |
+
+Tokens are kept in `localStorage` and refreshed transparently on a 401. The
+active tab and sort live in the URL hash, so `#/books` and `#/book/<id>` are
+shareable deep links. Uploads need a secure context (HTTPS or localhost) for
+`crypto.subtle` SHA-256 — over plain HTTP on a LAN address the client says so
+explicitly instead of failing silently.
+
 ## Android app
 
 Open `android/` in Android Studio (Ladybug+), let Gradle sync (version catalog
@@ -66,6 +96,31 @@ com.bookcon.app
 ├── reader/        ReaderEngine seam over Readium (EPUB/PDF/CBZ navigators)
 └── ui/            auth · library · details · reader · annotations · settings
 ```
+
+### Verifying the UI without a device
+
+`ScreenRenderTest` renders the main screens to PNG on the JVM using Robolectric
+native graphics, so the Compose UI can be checked (and screenshotted) with no
+emulator or tablet attached:
+
+```bash
+cd android
+./gradlew :app:testDebugUnitTest --tests "*ScreenRenderTest*"
+ls app/build/screenshots/   # android-library.png, android-home.png, …
+```
+
+It asserts the reference palette pixel-for-pixel — `#0d1117` pages, `#161b22`
+cards, `#00c853` nav accent, `#ff6b35` Import button, the `#2d1b4e` Book Detail
+gradient — and checks the reference copy through the semantics tree
+("My Library", "N books", "Import books", "No bookmarks yet", the bottom-nav
+labels). Two notes for anyone extending it:
+
+- Robolectric resolves its `android-all` runtime jar against the JVM's
+  `user.home`, so `build.gradle.kts` redirects it into `android/.robolectric-home/`
+  (gitignored, ~334 MB). Delete it to force a fresh download.
+- `captureToImage()` hangs under Robolectric's paused looper (`forceRedraw`
+  never fires), so the test measures/lays out the decor view and draws it into a
+  `Bitmap` directly.
 
 Sync model (TRD §3.2): local Room is the source of truth with dirty flags;
 `PushWorker` drains dirty rows (server LWW-accepts newer timestamps), then

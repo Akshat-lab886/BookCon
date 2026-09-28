@@ -96,7 +96,6 @@ fun PdfPager(
     onTurnRequestConsumed: () -> Unit = {},
     showThumbs: Boolean = false,
     onToggleThumbs: () -> Unit = {},
-    onJumpTo: (Int) -> Unit = {},
     pageAnimation: String = "slide",
     onTogglePageAnimation: () -> Unit = {},
     onOpenNotebook: () -> Unit = {},
@@ -133,7 +132,9 @@ fun PdfPager(
         try {
             val bmp = withContext(Dispatchers.IO) { pdf.renderPage(index, targetWidth) }
             pageCache[index] = bmp
-            // Keep the cache bounded: drop pages far from the current one.
+            // Keep the cache bounded: drop pages far from the current one. Dropped
+            // rather than recycled() — a page still visible mid-swipe would be
+            // drawing that bitmap, and recycling a live bitmap throws.
             pageCache.keys
                 .filter { it < pagerState.currentPage - 2 || it > pagerState.currentPage + 2 }
                 .forEach { pageCache.remove(it) }
@@ -144,10 +145,18 @@ fun PdfPager(
         }
     }
 
+    // Turning the page resets the zoom. Without this the scale and pan carried
+    // over onto the next page, so a reader who zoomed into a diagram landed on a
+    // random magnified corner of the following page with no obvious way back.
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.settledPage }
             .distinctUntilChanged()
-            .collect { page -> onPageChanged(page) }
+            .collect { page ->
+                zoom = 1f
+                panX = 0f
+                panY = 0f
+                onPageChanged(page)
+            }
     }
 
     // PRD VOICE-1: feed the assistant the current page text so it can "see" the screen.
@@ -172,17 +181,25 @@ fun PdfPager(
     }
     LaunchedEffect(pagerState) { ensureRendered(pagerState.currentPage) }
 
+    // HorizontalPager always animates its own scroll, so the "None" option could
+    // only be honoured on the paths this app drives itself. Taps, the bottom bar
+    // and the keyboard all route through these two, which is how the reader is
+    // actually navigated; scrollToPage jumps with no animation.
+    suspend fun goTo(page: Int) {
+        if (pageAnimation == "none") pagerState.scrollToPage(page) else pagerState.animateScrollToPage(page)
+    }
+
     LaunchedEffect(turnRequest) {
         val target = turnRequest ?: return@LaunchedEffect
         if (target in 0 until pdf.pageCount) {
-            pagerState.animateScrollToPage(target)
+            goTo(target)
         }
         onTurnRequestConsumed()
     }
 
     fun turnTo(page: Int) {
         val clamped = page.coerceIn(0, pdf.pageCount - 1)
-        scope.launch { pagerState.animateScrollToPage(clamped) }
+        scope.launch { goTo(clamped) }
     }
 
     Box(modifier.fillMaxSize()) {
@@ -380,8 +397,9 @@ fun PdfPager(
                 pdf = pdf,
                 currentPage = pagerState.currentPage,
                 onPick = { target ->
-                    scope.launch { pagerState.animateScrollToPage(target) }
-                    onJumpTo(target)
+                    // The pager scroll is the whole effect; the old onJumpTo callback
+                    // was a no-op lambda at the only call site.
+                    scope.launch { goTo(target) }
                 },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

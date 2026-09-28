@@ -12,6 +12,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -66,17 +67,35 @@ class AiSettingsViewModel @Inject constructor(
     /** Key stored on this device, read once when the screen is composed. */
     fun storedKey(): String = keyStore.get()
 
-    /** Persists the entered key on-device; blank input clears it instead. */
+    /** Outcome of a key write, so the screen can tell the truth about it. */
+    data class KeyWriteResult(val ok: Boolean, val cleared: Boolean)
+
+    private val _keyWrite = MutableStateFlow<KeyWriteResult?>(null)
+    val keyWrite: StateFlow<KeyWriteResult?> = _keyWrite.asStateFlow()
+
+    /**
+     * Persists the entered key on-device; blank input clears it instead.
+     *
+     * The result is published because the previous version reported nothing: a write
+     * that never reached disk (full disk, storage error) looked identical to a
+     * successful one, and the screen said "Key saved on this device" over a key that
+     * was not there.
+     */
     fun saveKey(key: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            if (key.isBlank()) keyStore.clear() else keyStore.set(key.trim())
+            val ok = if (key.isBlank()) keyStore.clear() else keyStore.set(key.trim())
+            _keyWrite.value = KeyWriteResult(ok = ok, cleared = key.isBlank())
         }
     }
 
     /** Removes the key from this device. */
     fun clearKey() {
-        viewModelScope.launch(Dispatchers.IO) { keyStore.clear() }
+        viewModelScope.launch(Dispatchers.IO) {
+            _keyWrite.value = KeyWriteResult(ok = keyStore.clear(), cleared = true)
+        }
     }
+
+    fun consumeKeyWrite() { _keyWrite.value = null }
 
     /** One-shot summarize round-trip used as a connectivity/credential test. */
     fun testConnection(provider: String, baseUrl: String, model: String, apiKey: String) {

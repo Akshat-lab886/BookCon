@@ -31,6 +31,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +49,7 @@ import com.bookcon.app.core.Net
 import com.bookcon.app.core.Summarizer
 import com.bookcon.app.ui.components.AppTopBar
 import com.bookcon.app.ui.components.PillButton
+import androidx.compose.foundation.layout.Box
 
 private val PROVIDER_OPTIONS = listOf(
     "openai" to "OpenAI",
@@ -85,6 +87,23 @@ fun AiSettingsScreen(
     var keyText by remember { mutableStateOf(storedKey) }
     var showKey by remember { mutableStateOf(false) }
     var keyStatus by remember { mutableStateOf<String?>(null) }
+    // The write is asynchronous, so the message has to come from the result rather
+    // than from the click. Claiming success at click time is how a failed write used
+    // to tell the user their key was saved.
+    val keyWrite by viewModel.keyWrite.collectAsStateWithLifecycle()
+    LaunchedEffect(keyWrite) {
+        when (val result = keyWrite) {
+            null -> Unit
+            else -> {
+                keyStatus = when {
+                    result.ok && result.cleared -> "Key removed from this device"
+                    result.ok -> "Key saved on this device"
+                    else -> "Couldn't write the key to storage — it was not saved"
+                }
+                viewModel.consumeKeyWrite()
+            }
+        }
+    }
 
     val testing = test == AiTestState.Running
     val online = settings.aiBaseUrl.contains("127.0.0.1") ||
@@ -157,36 +176,46 @@ fun AiSettingsScreen(
                         readOnly = true,
                         label = { Text("Groq model") },
                         trailingIcon = {
-                            IconButton(onClick = { expandedModel = !expandedModel }) {
-                                Icon(
-                                    if (expandedModel) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                    contentDescription = "Select model",
-                                )
+                            // The menu lives INSIDE trailingIcon so it anchors to the
+                            // field. As a sibling of the OutlinedTextField it anchored
+                            // to the card's own layout node, and the list opened at the
+                            // top-left of the card instead of under the dropdown.
+                            Box {
+                                IconButton(onClick = { expandedModel = !expandedModel }) {
+                                    Icon(
+                                        if (expandedModel) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = "Select model",
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = expandedModel,
+                                    onDismissRequest = { expandedModel = false },
+                                ) {
+                                    GROQ_MODELS.forEach { (id, desc) ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text(id, style = MaterialTheme.typography.bodyMedium)
+                                                    Text(
+                                                        desc,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                viewModel.setModel(id)
+                                                expandedModel = false
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 4.dp),
                     )
-                    DropdownMenu(
-                        expanded = expandedModel,
-                        onDismissRequest = { expandedModel = false },
-                    ) {
-                        GROQ_MODELS.forEach { (id, desc) ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column {
-                                        Text(id, style = MaterialTheme.typography.bodyMedium)
-                                        Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                },
-                                onClick = {
-                                    viewModel.setModel(id)
-                                    expandedModel = false
-                                },
-                            )
-                        }
-                    }
                 } else {
                     OutlinedTextField(
                         value = settings.aiModel,
@@ -237,16 +266,16 @@ fun AiSettingsScreen(
                     PillButton(
                         text = "Save",
                         onClick = {
+                            keyStatus = "Saving…"
                             viewModel.saveKey(keyText)
-                            keyStatus = "Key saved on this device"
                         },
                         enabled = keyText.isNotBlank(),
                     )
                     OutlinedButton(
                         onClick = {
+                            keyStatus = "Clearing…"
                             viewModel.clearKey()
                             keyText = ""
-                            keyStatus = null
                         },
                         enabled = keyText.isNotBlank() || storedKey.isNotBlank(),
                         shape = androidx.compose.foundation.shape.RoundedCornerShape(50),

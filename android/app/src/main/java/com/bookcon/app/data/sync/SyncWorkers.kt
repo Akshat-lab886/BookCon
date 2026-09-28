@@ -12,6 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.bookcon.app.core.SessionStore
+import com.bookcon.app.core.SettingsRepository
 import com.bookcon.app.data.local.AnnotationEntity
 import com.bookcon.app.data.local.BookConDatabase
 import com.bookcon.app.data.local.BookmarkEntity
@@ -30,6 +31,7 @@ import com.bookcon.app.data.remote.ShelfDto
 import com.bookcon.app.data.remote.SeriesDto
 import com.bookcon.app.data.remote.SyncPullRequest
 import com.bookcon.app.data.remote.SyncPushRequest
+import com.bookcon.app.data.remote.SyncPushResponse
 import com.bookcon.app.data.remote.TagDto
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -93,9 +95,20 @@ class PushWorker @AssistedInject constructor(
             pushTags()
             pushSeries()
             Result.success()
-        } catch (_: Exception) {
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // CancellationException IS an Exception, so a bare catch-all would
+            // swallow it: WorkManager stopping this worker would turn into a retry,
+            // and the coroutine would keep writing to the database from a dead
+            // scope. Rethrow so structured concurrency still works.
+            throw e
+            } catch (_: Exception) {
             Result.retry()
         }
+    }
+
+    private companion object {
+        /** Cap on how many rejected ids go into one log line. */
+        const val MAX_LOGGED_REJECTIONS = 10
     }
 
     private suspend fun pushAnnotations() {
@@ -104,6 +117,7 @@ class PushWorker @AssistedInject constructor(
         val resp = apiProvider.get().syncPush(SyncPushRequest(annotations = dirty.map { it.toDto() }))
         if (!resp.isSuccessful) throw java.io.IOException("push annotations ${resp.code()}")
         val body = resp.body() ?: return
+        reportRejected("annotations", body)
         val accepted = body.accepted["annotations"].orEmpty().toSet()
         db.annotationDao().clearDirty(dirty.filter { it.id in accepted }.map { it.id })
         // LWW-ignored rows: the server returned the authoritative version —
@@ -137,6 +151,7 @@ class PushWorker @AssistedInject constructor(
         val resp = apiProvider.get().syncPush(SyncPushRequest(bookmarks = dirty.map { it.toDto() }))
         if (!resp.isSuccessful) throw java.io.IOException("push bookmarks ${resp.code()}")
         val body = resp.body() ?: return
+        reportRejected("bookmarks", body)
         val accepted = body.accepted["bookmarks"].orEmpty().toSet()
         db.bookmarkDao().clearDirty(dirty.filter { it.id in accepted }.map { it.id })
         adoptAuthoritative(body.authoritative["bookmarks"]) { rows ->
@@ -164,6 +179,7 @@ class PushWorker @AssistedInject constructor(
         val resp = apiProvider.get().syncPush(SyncPushRequest(positions = dirty.map { it.toDto() }))
         if (!resp.isSuccessful) throw java.io.IOException("push positions ${resp.code()}")
         val body = resp.body() ?: return
+        reportRejected("positions", body)
         val accepted = body.accepted["positions"].orEmpty().toSet()
         dirty.filter { it.bookId in accepted }.forEach { db.positionDao().upsert(it.copy(dirty = false)) }
         // LWW-ignored positions: server row wins → overwrite local and clear dirty.
@@ -189,6 +205,7 @@ class PushWorker @AssistedInject constructor(
         val resp = apiProvider.get().syncPush(SyncPushRequest(shelves = dirty.map { it.toDto() }))
         if (!resp.isSuccessful) throw java.io.IOException("push shelves ${resp.code()}")
         val body = resp.body() ?: return
+        reportRejected("shelves", body)
         val accepted = body.accepted["shelves"].orEmpty().toSet()
         db.organizeDao().upsertShelves(dirty.filter { it.id in accepted }.map { it.copy(dirty = false) })
         // LWW-ignored: adopt the authoritative name/order from the server.
@@ -214,6 +231,7 @@ class PushWorker @AssistedInject constructor(
         val resp = apiProvider.get().syncPush(SyncPushRequest(tags = dirty.map { it.toDto() }))
         if (!resp.isSuccessful) throw java.io.IOException("push tags ${resp.code()}")
         val body = resp.body() ?: return
+        reportRejected("tags", body)
         val accepted = body.accepted["tags"].orEmpty().toSet()
         db.organizeDao().upsertTags(dirty.filter { it.id in accepted }.map { it.copy(dirty = false) })
         // LWW-ignored: adopt the authoritative name/order from the server.
@@ -238,6 +256,7 @@ class PushWorker @AssistedInject constructor(
         val resp = apiProvider.get().syncPush(SyncPushRequest(series = dirty.map { it.toDto() }))
         if (!resp.isSuccessful) throw java.io.IOException("push series ${resp.code()}")
         val body = resp.body() ?: return
+        reportRejected("series", body)
         val accepted = body.accepted["series"].orEmpty().toSet()
         db.organizeDao().upsertSeries(dirty.filter { it.id in accepted }.map { it.copy(dirty = false) })
         // LWW-ignored: adopt the authoritative name/order from the server.
@@ -257,6 +276,27 @@ class PushWorker @AssistedInject constructor(
     }
 
 
+    /**
+     * Surfaces rows the server refused.
+     *
+     * A rejected row is in neither `accepted` nor `authoritative`, so it stayed
+     * `dirty = 1` and was re-uploaded on every 15-minute cycle forever while nothing
+     * anywhere said so — the highlight simply never appeared on the other device.
+     * The commonest cause is a highlight on a book the server does not have.
+     *
+     * The rows are deliberately left dirty: dropping the flag would silently
+     * abandon the user's highlight, and the local copy is the one that matters.
+     */
+    private fun reportRejected(entity: String, body: SyncPushResponse) {
+        val rejected = body.rejected[entity].orEmpty()
+        if (rejected.isEmpty()) return
+        android.util.Log.w(
+            "BookConSync",
+            "server rejected ${rejected.size} $entity row(s); they stay dirty and retry: " +
+                rejected.take(MAX_LOGGED_REJECTIONS).joinToString(),
+        )
+    }
+
     private suspend fun adoptAuthoritative(
         rows: List<kotlinx.serialization.json.JsonObject>?,
         apply: suspend (List<kotlinx.serialization.json.JsonObject>) -> Unit,
@@ -264,14 +304,39 @@ class PushWorker @AssistedInject constructor(
         if (!rows.isNullOrEmpty()) apply(rows)
     }
 
-    private fun asString(obj: kotlinx.serialization.json.JsonObject, key: String): String? =
-        (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { !it.isString || it.content != "null" }?.content
+    /**
+     * Reads a string field, mapping a JSON null to a Kotlin null.
+     *
+     * The null check has to be an `is JsonNull` test. `JsonNull` IS a
+     * `JsonPrimitive` whose `isString` is false and whose `content` is the
+     * four-character string "null", so a predicate shaped like
+     * `!isString || content != "null"` lets the null through and returns that
+     * literal. The server sends `"deleted_at": null` for every live row, so after
+     * each push every highlight, bookmark, shelf, tag and series was rewritten
+     * locally with `deletedAt = "null"` — and since every list query filters
+     * `WHERE deletedAt IS NULL`, the user's own data disappeared from the UI.
+     */
+    private fun asString(obj: kotlinx.serialization.json.JsonObject, key: String): String? {
+        val element = obj[key]
+        if (element == null || element is kotlinx.serialization.json.JsonNull) return null
+        return (element as? kotlinx.serialization.json.JsonPrimitive)?.content
+    }
 
     private fun rawJson(element: kotlinx.serialization.json.JsonElement?): String =
         element?.toString() ?: "{}"
 
     private fun stringList(element: kotlinx.serialization.json.JsonElement?): List<String> =
-        (element as? kotlinx.serialization.json.JsonArray)?.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: emptyList()
+        (element as? kotlinx.serialization.json.JsonArray)
+            ?.mapNotNull { item ->
+                // Same JsonNull trap as asString: JsonNull is a JsonPrimitive whose
+                // content is the string "null", so a bare mapNotNull puts a literal
+                // "null" into tag/shelf lists.
+                if (item is kotlinx.serialization.json.JsonNull) {
+                    null
+                } else {
+                    (item as? kotlinx.serialization.json.JsonPrimitive)?.content
+                }
+            } ?: emptyList()
 
     private fun jsonLong(obj: kotlinx.serialization.json.JsonObject, key: String): Long =
         (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull() ?: 0L
@@ -327,15 +392,73 @@ class PullWorker @AssistedInject constructor(
     private val db: BookConDatabase,
     private val apiProvider: ApiProvider,
     private val sessions: SessionStore,
+    private val settingsRepo: SettingsRepository,
 ) : CoroutineWorker(context, params) {
 
+    /**
+     * Pulls until the server stops reporting more pages.
+     *
+     * The server caps each response at 500 rows per entity and sets `has_more`,
+     * returning the cursor of the last row actually sent. This used to be called
+     * once and its return value dropped, so a first sync or a long offline stretch
+     * silently delivered only the first 500 rows of everything and then reported
+     * success — the rest trickled in one page per background cycle.
+     *
+     * [maxPages] bounds the loop so a server that keeps saying `has_more` without
+     * advancing cannot spin forever.
+     */
+    internal suspend fun pullAll(
+        db: BookConDatabase,
+        apiProvider: ApiProvider,
+        sessions: SessionStore,
+        maxPages: Int = 20,
+    ): Int {
+        var pages = 0
+        while (pages < maxPages) {
+            if (!runPullOnce(db, apiProvider, sessions)) break
+            pages++
+        }
+        return pages
+    }
+
     override suspend fun doWork(): Result = try {
-        runPullOnce(db, apiProvider, sessions)
+        pullAll(db, apiProvider, sessions)
+        // Stamp here, on actual completion. forceSync() used to stamp at ENQUEUE time
+        // while the jobs sat behind a CONNECTED network constraint, so tapping "Force
+        // sync now" offline instantly changed the Settings row to "just now" and
+        // implied a sync that never ran. Background pulls never updated it at all.
+        runCatching { settingsRepo.setLastSyncedAt(System.currentTimeMillis()) }
         Result.success()
-    } catch (_: Exception) {
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // CancellationException IS an Exception, so a bare catch-all would
+        // swallow it: WorkManager stopping this worker would turn into a retry,
+        // and the coroutine would keep writing to the database from a dead
+        // scope. Rethrow so structured concurrency still works.
+        throw e
+        } catch (_: Exception) {
         Result.retry()
     }
 }
+
+/**
+ * How many local changes are still waiting to reach the server.
+ *
+ * Rows the server rejects stay dirty on purpose — dropping them would lose the
+ * user's edits — so they are re-pushed on every cycle and were previously visible
+ * only in logcat. An edit could therefore sit unsynced indefinitely while the UI
+ * showed a healthy "Last synced" stamp. This is what the Settings screen shows
+ * instead, so a stuck sync is visible rather than silent.
+ *
+ * Books are excluded: their content is uploaded separately and the server rejects
+ * them on the sync push by design.
+ */
+internal suspend fun BookConDatabase.pendingSyncCount(): Int =
+    annotationDao().dirty().size +
+        bookmarkDao().dirty().size +
+        positionDao().dirty().size +
+        organizeDao().dirtyShelves().size +
+        organizeDao().dirtyTags().size +
+        organizeDao().dirtySeries().size
 
 /** Mapping helpers DTO ↔ Entity. */
 fun AnnotationEntity.toDto() = AnnotationDto(
@@ -423,9 +546,13 @@ suspend fun BookConDatabase.applyMerged(
     )
     // Books: preserve local-only columns (download state, file path, open time)
     // that the DTO does not carry — @Insert(REPLACE) would otherwise wipe them.
+    // Fetch the existing rows once instead of issuing a SELECT per pulled book.
+    // `.map` on a List is eager, so the old per-DTO `get()` ran N full-row queries
+    // on every periodic sync purely to copy four local-only columns.
+    val existingBooks = bookDao().all().associateBy { it.id }
     bookDao().applyPulled(body.books.map { dto ->
         val incoming = dto.toEntity(userId)
-        val existing = bookDao().get(dto.id)
+        val existing = existingBooks[dto.id]
         if (existing == null) incoming else incoming.copy(
             localFile = existing.localFile,
             pinnedOffline = existing.pinnedOffline,

@@ -70,6 +70,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -119,12 +121,20 @@ import androidx.compose.foundation.gestures.awaitFirstDown
  * chrome, tap zones, panels and window-level effects. Fully offline once the book file exists.
  */
 @Composable
-fun ReaderScreen(bookId: String, onClose: () -> Unit) {
+fun ReaderScreen(
+    bookId: String,
+    onClose: () -> Unit,
+    /**
+     * Seek to this position instead of the last saved one. Set when the reader was
+     * opened from a bookmark; null means resume-where-I-left-off.
+     */
+    startLocatorJson: String? = null,
+) {
     val viewModel: ReaderViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
-    LaunchedEffect(bookId) { viewModel.init(bookId) }
+    LaunchedEffect(bookId, startLocatorJson) { viewModel.init(bookId, startLocatorJson) }
 
     val readerTheme: ReaderTheme = ReaderThemes[settings.readerTheme] ?: ReaderThemes.getValue("light")
 
@@ -136,6 +146,18 @@ fun ReaderScreen(bookId: String, onClose: () -> Unit) {
 
     // Focus anchor so volume-key page turns (RD-16) receive key events on the container.
     val focusRequester = remember { FocusRequester() }
+    // Collected up here because system Back has to know whether the notebook sheet
+    // is open before deciding what to dismiss.
+    val notebookState by viewModel.notebook.collectAsStateWithLifecycle()
+    // Page-turn animation for the EPUB navigator surface (PDFs use AnimatedPager).
+    val pageTurnCoordinator = rememberPageTurnCoordinator()
+    // Re-bind whenever the setting changes so the animation follows the user.
+    LaunchedEffect(settings.readerPageTurnAnimation) {
+        pageTurnCoordinator.configure(
+            animation = { PageAnimation.fromId(settings.readerPageTurnAnimation) },
+            navigate = { forward -> viewModel.turnPage(forward = forward) },
+        )
+    }
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
 
     // RD-13: auto-hide chrome after 15s of idle while reading.
@@ -155,6 +177,12 @@ fun ReaderScreen(bookId: String, onClose: () -> Unit) {
     // System back: dismiss overlays first, otherwise flush position and pop (RD-12).
     BackHandler {
         when {
+            // The notebook sheet is a full-screen overlay of its own, and it owns a
+            // debounced autosave. Back used to skip past it, which closed the reader
+            // with an edit still pending — and onCleared cancels the save job, so the
+            // note was silently lost. Closing the sheet is both the expected
+            // behaviour and what flushes the write.
+            notebookState.open -> viewModel.closeNotebook()
             state.panel != ReaderPanel.NONE -> viewModel.closePanel()
             state.chromeVisible -> viewModel.setChromeVisible(false)
             else -> {
@@ -223,6 +251,7 @@ fun ReaderScreen(bookId: String, onClose: () -> Unit) {
                 viewModel.notifyClosing()
                 onClose()
             },
+            pageTurn = pageTurnCoordinator,
         )
     }
 }
@@ -250,8 +279,21 @@ private fun ReaderContentHost(
     onEditTapZones: () -> Unit,
     onLongPressAnnotation: (AnnotationEntity) -> Unit,
     onClose: () -> Unit,
+    pageTurn: PageTurnCoordinator,
 ) {
     val engine = state.engine
+
+    // A page turn from a tap zone or a volume key, for either format.
+    //
+    // The animated coordinator drives the Readium navigator view, which only exists
+    // for EPUB. A PDF has no engine, so sending it through the coordinator reached a
+    // ViewModel method that returned immediately — and because the tap-zone layer
+    // sits on top and consumes the tap, a configured NEXT/PREV zone on a PDF
+    // swallowed the tap and did nothing at all. PDFs go to the pager instead, which
+    // animates with the same page-turn animation the setting already names.
+    val turnPage: (Boolean) -> Unit = { forward ->
+        if (state.pdfBook != null) viewModel.turnPdfPage(forward) else pageTurn.turnAnimated(forward)
+    }
 
     Box(
         modifier = Modifier
@@ -264,11 +306,11 @@ private fun ReaderContentHost(
                 if (!settings.volumeKeyTurns) return@onPreviewKeyEvent false
                 when (event.nativeKeyEvent.keyCode) {
                     KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                        viewModel.turnPage(forward = true)
+                        turnPage(true)
                         true
                     }
                     KeyEvent.KEYCODE_VOLUME_UP -> {
-                        viewModel.turnPage(forward = false)
+                        turnPage(false)
                         true
                     }
                     else -> false
@@ -277,14 +319,25 @@ private fun ReaderContentHost(
     ) {
         val pdf = state.pdfBook
         var pdfThumbs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+        // Zoom lock was a FAB that did nothing: PdfPager took the flag and the
+        // callback, but the defaults (false / {}) were used because nothing here
+        // passed them, so tapping it silently did nothing at all.
+        var pdfZoomLocked by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
         val lookupWord = androidx.compose.runtime.remember {
             androidx.compose.runtime.mutableStateOf<String?>(null)
         }
         // Reading-time tracking: one minute per minute of active reader session.
         ReadingMinuteTicker(bookId = state.book?.id)
 
+        // Start the poller unconditionally once the reader is ready. The poller
+        // re-checks `hasSelectionBridge` on every tick, so it self-gates until the
+        // navigator WebView exists. Gating the *call* on the bridge used to test it
+        // before `webViewEvaluator` was ever assigned (it is set after the fragment
+        // attaches, which can take seconds), and this effect's keys never changed
+        // again — so the selection bar and word lookup stayed unreachable for the
+        // whole session.
         androidx.compose.runtime.LaunchedEffect(state.engine, state.phase) {
-            if (state.engine?.hasSelectionBridge == true && state.phase == ReaderPhase.READY) {
+            if (state.phase == ReaderPhase.READY) {
                 viewModel.startSelectionPolling()
             }
         }
@@ -322,7 +375,8 @@ private fun ReaderContentHost(
                 onToggleReadAloud = { viewModel.toggleReadAloud() },
                 showThumbs = pdfThumbs,
                 onToggleThumbs = { pdfThumbs = !pdfThumbs },
-                onJumpTo = { },
+                zoomLocked = pdfZoomLocked,
+                onToggleZoomLock = { pdfZoomLocked = !pdfZoomLocked },
                 turnRequest = viewModel.pdfTurnRequest.collectAsStateWithLifecycle().value,
                 onTurnRequestConsumed = { viewModel.consumePdfTurnRequest() },
                 pageAnimation = settings.readerPageTurnAnimation,
@@ -334,7 +388,16 @@ private fun ReaderContentHost(
             engine == null -> ReaderStatusCard(state = state, onClose = onClose)
 
             else -> {
-            NavigatorContainer(engine = engine, modifier = Modifier.fillMaxSize())
+            NavigatorContainer(
+                engine = engine,
+                modifier = Modifier.fillMaxSize(),
+                onViewReady = { view -> pageTurn.navigatorView = view },
+            )
+            PageTurnOverlay(
+                coordinator = pageTurn,
+                pageBackground = readerTheme.bg,
+                modifier = Modifier.fillMaxSize(),
+            )
 
 
             val probeActivity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
@@ -414,8 +477,8 @@ private fun ReaderContentHost(
                 grid = TapZoneGrid.fromJson(settings.tapZonesJson),
                 modifier = Modifier.fillMaxSize(),
                 gesturesEnabled = !inkArmed,
-                onPrev = { viewModel.turnPage(forward = false) },
-                onNext = { viewModel.turnPage(forward = true) },
+                onPrev = { turnPage(false) },
+                onNext = { turnPage(true) },
                 onToggleChrome = { viewModel.toggleChrome() },
                 onLongPressAtRoot = forwardLongPress.takeIf { !inkArmed },
             )
@@ -434,6 +497,24 @@ private fun ReaderContentHost(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+
+            // VOICE-1: the EPUB/Readium path gets the same voice conversation button as
+            // the PDF path. Readium exposes the current page's DOM text in
+            // `LocatorModel.text`, so the assistant can "see" the page the same way.
+            EpubVoiceContext(
+                engine = engine,
+                bookTitle = state.book?.title.orEmpty(),
+                assistant = viewModel.voiceAssistant,
+            )
+            if (!inkArmed) {
+                VoiceModeButton(
+                    assistant = viewModel.voiceAssistant,
+                    onRequestAudioPermission = { /* granted by MainActivity manifest prompt */ },
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 20.dp, bottom = 168.dp),
+                )
+            }
 
             androidx.compose.material3.ExtendedFloatingActionButton(
                 onClick = {
@@ -469,7 +550,15 @@ private fun ReaderContentHost(
             // ANN-1/ANN-2: selection toolbar while text is selected.
             SelectionToolbarHost(
                 engine = engine,
-                visible = state.panel == ReaderPanel.NONE && !state.pdfInkTool.let { it != PdfInkTool.NONE },
+                // Requires an engine. A PDF has none, and the toolbar polls
+                // engine.currentSelection() on a 250 ms timer whenever `visible` is
+                // true — so without this guard a PDF opened with the pen stowed
+                // (pdfInkTool == NONE) satisfied `visible`, and the poll ran against
+                // a null engine. The toolbar is EPUB-only: PDFs have no text
+                // selection to offer in the first place.
+                visible = engine != null &&
+                    state.panel == ReaderPanel.NONE &&
+                    state.pdfInkTool == PdfInkTool.NONE,
                 onAiAction = { action, excerpt -> viewModel.runSelectionAi(action, excerpt) },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -571,7 +660,11 @@ private fun ReaderContentHost(
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp),
             )
         }
-        com.bookcon.app.ui.reader.WordLookupHost(state = lookupWord)
+        com.bookcon.app.ui.reader.WordLookupHost(
+            state = lookupWord,
+            // Read through the VM so the reader's settings flow is the source of truth.
+            autoCapture = viewModel.settings.value.vocabCaptureEnabled,
+        )
 
         // Read-aloud pill.
         ReadAloudBar(
@@ -582,7 +675,7 @@ private fun ReaderContentHost(
         // v1.5 notebook: swipe up from the very bottom edge opens the notebook
         // sheet. Narrow 36dp strip so page turns and tap zones stay unaffected;
         // disabled while another panel is up or an ink tool is armed.
-        val notebook by viewModel.notebook.collectAsStateWithLifecycle()
+        val notebook = viewModel.notebook.collectAsStateWithLifecycle().value
         val notebookSheetOpen = notebook.open
         if (state.phase == ReaderPhase.READY &&
             state.panel == ReaderPanel.NONE &&
@@ -634,6 +727,7 @@ private fun ReaderContentHost(
 private fun NavigatorContainer(
     engine: ReaderEngine,
     modifier: Modifier = Modifier,
+    onViewReady: (android.view.View) -> Unit = {},
 ) {
     val context = LocalContext.current
     val activity = context as? FragmentActivity
@@ -645,7 +739,10 @@ private fun NavigatorContainer(
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            FrameLayout(ctx).apply { id = containerId }
+            FrameLayout(ctx).apply {
+                id = containerId
+                onViewReady(this)
+            }
         },
     )
     LaunchedEffect(engine) {
@@ -845,7 +942,7 @@ private fun ReaderTopBar(
                 )
             }
         }
-        BatteryStubWhite()
+        BatteryIndicator()
         Spacer(Modifier.width(8.dp))
     }
 }
@@ -952,17 +1049,32 @@ private fun ReaderChromeIconButton(
     }
 }
 
-/** Battery indicator rendered in white-on-dark for the transparent top bar. */
+/**
+ * Battery indicator rendered in white-on-dark for the transparent top bar.
+ * PRD RD-13 makes this optional; it reads the sticky battery intent and refreshes
+ * it periodically so the percentage does not go stale.
+ */
 @Composable
-private fun BatteryStubWhite() {
+private fun BatteryIndicator() {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val level = remember(context) {
-        runCatching {
-            val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    // Refreshed on a timer. It used to be read once with `remember`, so the number
+    // froze at whatever the charge was when the reader opened and then drifted
+    // further and further from reality for the rest of the session.
+    var level by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(-1) }
+    androidx.compose.runtime.LaunchedEffect(context) {
+        fun readLevel(): Int = runCatching {
+            val intent = context.registerReceiver(
+                null, IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+            )
             val raw = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
             if (raw >= 0 && scale > 0) raw * 100 / scale else -1
         }.getOrDefault(-1)
+
+        while (true) {
+            level = readLevel()
+            kotlinx.coroutines.delay(30_000L)
+        }
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
@@ -982,43 +1094,7 @@ private fun BatteryStubWhite() {
     }
 }
 
-/** Optional battery indicator (PRD RD-13 "optional"); reads the sticky battery intent once. */
-@Composable
-private fun BatteryStub(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val level = remember(context) {
-        runCatching {
-            val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val raw = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-            if (raw >= 0 && scale > 0) raw * 100 / scale else -1
-        }.getOrDefault(-1)
-    }
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            Icons.Filled.BatteryFull,
-            contentDescription = "Battery",
-            tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(18.dp),
-        )
-        if (level >= 0) {
-            Text(
-                "$level%",
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(start = 2.dp),
-            )
-        }
-    }
-}
-
-// --------------------------------------------------------------------------------- tap zones
-
-/**
- * RD-8: invisible 3×3 tap grid implemented as nine WEIGHTED CELLS in a column of
- * rows — a cell is clickable only when its configured action is not NONE, and the
- * center cell (where reading happens) defaults to NONE. Unmapped areas are NOT
- * hit-testable, so navigator gestures flow through untouched.
- */
+/** Invisible grid over the page that turns taps into prev/next/chrome toggles. */
 @Composable
 private fun TapZoneLayer(
     grid: TapZoneGrid,
@@ -1051,6 +1127,7 @@ private fun TapZoneLayer(
                                         // keep working.
                                         awaitEachGesture {
                                             val down = awaitFirstDown(requireUnconsumed = false)
+                                            val startUptime = down.uptimeMillis
                                             var consumedElsewhere = false
                                             var moved = false
                                             var upOffset: Offset? = null
@@ -1080,10 +1157,17 @@ private fun TapZoneLayer(
                                                     TapAction.NONE -> Unit
                                                 }
                                             } else if (!moved && upOffset != null &&
-                                                action != TapAction.NONE
+                                                action != TapAction.NONE &&
+                                                down.uptimeMillis - startUptime <=
+                                                viewConfiguration.longPressTimeoutMillis
                                             ) {
                                                 // Stationary press inside an actionable zone:
-                                                // forward as long-press for text selection.
+                                                // forward as a long press for text selection.
+                                                // The duration check is the point — without
+                                                // it any ordinary tap that the WebView
+                                                // consumed (a link, for example) also fired
+                                                // here, so tapping a link started a selection
+                                                // instead of opening it.
                                                 val target = cellRoot + upOffset
                                                 onLongPressAtRoot?.invoke(target.x, target.y)
                                             }
@@ -1139,7 +1223,7 @@ private fun FlashHighlightOverlay(tick: Int, modifier: Modifier = Modifier) {
 /** ANN-1/2: floating toolbar while the navigator reports a text selection. */
 @Composable
 private fun SelectionToolbarHost(
-    engine: ReaderEngine,
+    engine: ReaderEngine?,
     visible: Boolean,
     modifier: Modifier = Modifier,
     onSave: (selection: EngineSelection?, color: String, note: String) -> Unit,
@@ -1150,11 +1234,12 @@ private fun SelectionToolbarHost(
     // poll cheaply while the toolbar is eligible (the toolbar is hidden most of the time).
     var selection by remember { mutableStateOf<EngineSelection?>(null) }
     LaunchedEffect(engine, visible) {
-        if (!visible) {
+        val active = engine
+        if (!visible || active == null) {
             selection = null
         } else {
             while (true) {
-                selection = engine.currentSelection()
+                selection = active.currentSelection()
                 kotlinx.coroutines.delay(250)
             }
         }
@@ -1270,16 +1355,68 @@ private fun ApplyOrientationLock(activity: Activity?, lock: String) {
 
 /** Logs one reading minute per 60s while the reader is in the foreground (PRD STAT-*). */
 @Composable
+/**
+ * Credits one reading minute per minute of *foreground* reading.
+ *
+ * The loop is bound to the STARTED lifecycle rather than to composition: the
+ * composition outlives onStop, so a plain LaunchedEffect kept crediting minutes
+ * with the screen off or the app backgrounded, inflating every reading statistic
+ * and streak.
+ */
 private fun ReadingMinuteTicker(bookId: String?) {
     if (bookId == null) return
     val context = androidx.compose.ui.platform.LocalContext.current
-    androidx.compose.runtime.LaunchedEffect(bookId) {
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.LaunchedEffect(bookId, lifecycleOwner) {
         val tracker = com.bookcon.app.core.ReadingTracker(context)
-        while (true) {
-            kotlinx.coroutines.delay(60_000)
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                tracker.logMinute(bookId)
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                kotlinx.coroutines.delay(60_000)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    tracker.logMinute(bookId)
+                }
             }
+        }
+    }
+}
+
+/**
+ * VOICE-1: keep the voice assistant's view of the EPUB page up to date.
+ *
+ * The PDF path can ask its renderer for page text synchronously. Readium has no
+ * equivalent, but `LocatorModel.text` carries the current page's DOM text for
+ * EPUB, and `locations.progression` gives the position, so we build the context
+ * from those. Falls back to the book title plus progress when the navigator has
+ * not populated the text yet (e.g. first paint).
+ */
+@Composable
+private fun EpubVoiceContext(
+    engine: com.bookcon.app.reader.ReaderEngine?,
+    bookTitle: String,
+    assistant: com.bookcon.app.core.VoiceAssistant?,
+) {
+    DisposableEffect(engine, bookTitle, assistant) {
+        if (assistant != null && engine != null) {
+            // Invoked by VoiceAssistant on its own IO dispatcher, so keep this
+            // synchronous — no suspend calls, no state reads.
+            assistant.pageContext = {
+                val loc = runCatching { engine.currentLocator.value }.getOrNull()
+                val body = loc?.text?.toString()?.trim().orEmpty()
+                val pct = ((loc?.locations?.progression ?: 0.0) * 100).toInt()
+                when {
+                    body.isNotEmpty() -> buildString {
+                        append("Currently reading \"").append(bookTitle).append("\"")
+                        append(" (").append(pct).append("% through).\n\nPage text:\n")
+                        append(body.take(8_000))
+                    }
+                    pct > 0 -> "Currently reading \"$bookTitle\" ($pct% through). " +
+                        "The page text is not available yet — ask the user to describe the passage."
+                    else -> "The user is reading \"$bookTitle\"."
+                }
+            }
+        }
+        onDispose {
+            if (assistant?.pageContext != null) assistant.pageContext = { null }
         }
     }
 }

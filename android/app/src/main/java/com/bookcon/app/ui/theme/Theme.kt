@@ -41,7 +41,14 @@ fun BookConTheme(
     val view = LocalView.current
     SideEffect {
         val window = (view.context as? Activity)?.window ?: return@SideEffect
-        androidx.core.view.WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+        // The app is dark-only in practice and draws a dark page behind the
+        // status bar, so the system icons must stay light. The previous
+        // `= !darkTheme` resolved to dark icons on the dark bar, which made the
+        // clock almost invisible.
+        androidx.core.view.WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
     }
     MaterialTheme(
         colorScheme = colors,

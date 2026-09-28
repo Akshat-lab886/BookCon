@@ -19,6 +19,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Warning
+import com.bookcon.app.ui.theme.BrandColors
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -122,6 +126,29 @@ fun AuthScreen(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth(),
             )
+            // Not an error — signing in over http to a LAN server is a legitimate
+            // self-hosted setup — but the password and refresh token are readable by
+            // anything on the path, so the user is told before they type it.
+            state.insecureWarning?.let { warning ->
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = BrandColors.Salmon,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        warning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BrandColors.Salmon,
+                    )
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
             OutlinedTextField(

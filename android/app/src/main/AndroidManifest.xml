@@ -6,7 +6,10 @@
     <!-- Voice assistant: record user speech for STT (PRD VOICE-1). -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- Voice assistant: capture screen to build page context. -->
-    <uses-permission android:name="android.permission.CAPTURE_VIDEO_OUTPUT" />
+    <!-- Removed: android.permission.CAPTURE_VIDEO_OUTPUT is protectionLevel
+         signature|privileged, so a normal install can never be granted it. Nothing
+         in the app requested it either — it only made Play Store / review tooling
+         report the app as claiming a system-only capability. -->
 
     <application
         android:name=".BookConApplication"

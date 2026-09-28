@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bookcon.app.ui.components.AppTopBar
 import com.bookcon.app.ui.components.OutlinePillButton
 import com.bookcon.app.ui.components.PillButton
+import com.bookcon.app.ui.theme.BrandColors
 
 /**
  * Import over Wi-Fi (PRD IMP-WIFI): runs the on-device upload server and shows the URL
@@ -68,6 +69,15 @@ fun WifiImportScreen(
             Spacer(Modifier.padding(top = 16.dp))
             HeroCard {
                 if (state.running && state.url != null) {
+                    // Resolved once, on purpose. `state` is a delegated property
+                    // (`by collectAsStateWithLifecycle()`), so no smart cast reaches
+                    // through it and the value has to be bound to a name. Doing that
+                    // here — during composition, inside the branch that proved it
+                    // non-null — is safe, and the click lambda below then closes over
+                    // an immutable String. Reading `state.url` inside that lambda
+                    // instead would crash the app if the server stopped between the
+                    // button being drawn and being tapped.
+                    val runningUrl = state.url!!
                     Text(
                         "Server running",
                         style = MaterialTheme.typography.titleMedium,
@@ -75,18 +85,31 @@ fun WifiImportScreen(
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        state.url!!,
+                        runningUrl,
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.height(16.dp))
                     PillButton(
                         text = "Copy URL",
-                        onClick = {
-                            clipboard.setText(AnnotatedString(state.url!!))
-                        },
+                        onClick = { clipboard.setText(AnnotatedString(runningUrl)) },
                         container = MaterialTheme.colorScheme.primary,
                         content = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else if (state.error != null) {
+                    // Say what actually went wrong. The previous behaviour showed
+                    // "Server stopped" for a port clash, hiding the reason, and on
+                    // the way to it reported "Server running" with a dead URL.
+                    Text(
+                        "Couldn't start",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = BrandColors.Salmon,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        state.error!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 } else {
                     Text("Server stopped", style = MaterialTheme.typography.titleMedium)
@@ -94,6 +117,17 @@ fun WifiImportScreen(
                     PillButton(
                         text = "Start server",
                         onClick = viewModel::startServer,
+                    )
+                }
+
+                state.lastError?.let { rejection ->
+                    Spacer(Modifier.height(16.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        rejection,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BrandColors.Salmon,
                     )
                 }
 

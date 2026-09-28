@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bookcon.app.ui.components.AppTopBar
+import com.bookcon.app.ui.components.RefreshOnResume
 
 /** Reading stats dashboard: today-vs-goal ring, streak, 30-day bars, goal editor.
  *  v1.3 redesign: blue AppTopBar with rounded bottom, hairline-bordered cards,
@@ -46,6 +47,11 @@ fun StatsScreen(
     viewModel: StatsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // hiltViewModel() is scoped to the NavBackStackEntry, so the ViewModel outlives
+    // a back-and-forth and the `init { refresh() }` never ran again. Reading for 40
+    // minutes and returning to this screen showed the minutes from before the visit.
+    RefreshOnResume { viewModel.refresh() }
 
     Scaffold(
         topBar = {
@@ -70,7 +76,12 @@ fun StatsScreen(
                 GoalRing(todayMinutes = state.todayMinutes, goalMinutes = state.goalMinutes)
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    "${state.todayMinutes} of ${state.goalMinutes} min today",
+                    if (state.goalMinutes > 0) {
+                        "${state.todayMinutes} of ${state.goalMinutes} min today"
+                    } else {
+                        // "12 of 0 min" is meaningless; say what is actually true.
+                        "${state.todayMinutes} min today · no goal set"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(Modifier.height(4.dp))
@@ -211,8 +222,11 @@ private fun StreakChip(days: Int) {
 
 @Composable
 private fun GoalRing(todayMinutes: Int, goalMinutes: Int) {
+    // No goal set: show an empty ring, never a full one. Returning 1f whenever any
+    // time had been read meant a brand-new user with no goal saw a complete green
+    // ring next to a caption reading "12 of 0 min today".
     val progress = if (goalMinutes <= 0) {
-        if (todayMinutes > 0) 1f else 0f
+        0f
     } else {
         (todayMinutes.toFloat() / goalMinutes).coerceIn(0f, 1f)
     }

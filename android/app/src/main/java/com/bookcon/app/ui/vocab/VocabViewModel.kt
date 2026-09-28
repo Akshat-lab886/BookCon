@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import com.bookcon.app.core.AppSettings
 import com.bookcon.app.core.SettingsRepository
 import com.bookcon.app.core.VocabStore
+import com.bookcon.app.core.VocabStore.VocabEntry
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Backing state for [VocabScreen]: the saved-word list, the due review queue and
@@ -73,9 +75,41 @@ class VocabViewModel @Inject constructor(
     }
 
     /** Deletes [word] from the notebook entirely. */
+    /**
+     * The most recently removed entry, kept so the delete can be undone.
+     *
+     * Exposed as a StateFlow rather than a plain var behind a getter: the screen
+     * reads it during composition to decide whether to show the undo banner, and
+     * keys its auto-dismiss timer on it. A plain var changed neither, so the banner
+     * relied on an unrelated recomposition and its countdown never started.
+     */
+    private val _pendingRemoval = MutableStateFlow<VocabEntry?>(null)
+    val pendingRemoval: StateFlow<VocabEntry?> = _pendingRemoval.asStateFlow()
+
+    fun hasUndoableRemove(): Boolean = _pendingRemoval.value != null
+
+    /**
+     * A stray tap on the trash icon used to destroy a word and all of its Leitner
+     * box/due progress immediately — no dialog, no snackbar, no way back — and it could
+     * even hit the card currently under review. The entry is now retained so
+     * [undoRemove] can put it back with its progress intact.
+     */
     fun remove(word: String) {
         viewModelScope.launch {
+            val key = word.trim().lowercase()
+            _pendingRemoval.value = store.all().firstOrNull { it.word.trim().lowercase() == key }
             store.remove(word)
+            refreshNow()
+        }
+    }
+
+    fun undoRemove() {
+        val entry = _pendingRemoval.value ?: return
+        _pendingRemoval.value = null
+        viewModelScope.launch {
+            // Restored verbatim: add() would start the word again at Leitner box 0,
+            // so the undo would quietly discard the progress it is meant to bring back.
+            store.restoreEntry(entry)
             refreshNow()
         }
     }
