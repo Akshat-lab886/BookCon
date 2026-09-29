@@ -51,11 +51,57 @@ class ReadAloudController(
             if (wanted.isBlank()) {
                 // Reset to the default for the locale we already selected.
                 tts.language = Locale.getDefault()
+                applyBestVoice()
                 return@runCatching
             }
             val voice = tts.voices?.firstOrNull { it.name == wanted }
             if (voice != null) tts.voice = voice
         }
+    }
+
+    /**
+     * Picks the best voice available for the current language.
+     *
+     * Without a choice, `tts.language = X` leaves whatever the engine considers its
+     * own default — frequently the lowest-quality voice it ships, which is the main
+     * reason narration can sound thin and robotic on a device that also has good
+     * voices installed. The ranking below prefers, in order: a high-quality voice
+     * over a normal one, a network (neural) voice over an on-device one, and
+     * something that requires no network when the user may be offline.
+     *
+     * A network voice is preferred even though it needs a connection, because the
+     * neural voices are the ones that sound human; the on-device ones are chosen
+     * only when there is no network voice for the language. setSpeechRate is left
+     * alone — changing it per voice would override the user's own speed setting.
+     */
+    private fun applyBestVoice() {
+        runCatching {
+            val locale = tts.language ?: return@runCatching
+            val candidates = tts.voices?.filter { matchesLanguage(it, locale) }
+                ?: return@runCatching
+            if (candidates.isEmpty()) return@runCatching
+            val best = candidates.minWithOrNull(
+                compareBy<android.speech.tts.Voice> { voice ->
+                    // higher quality first
+                    -voice.quality
+                }.thenBy { voice ->
+                    // network (neural) voices before on-device ones
+                    if (voice.isNetworkConnectionRequired) 0 else 1
+                }.thenBy { it.name },
+            ) ?: return@runCatching
+            tts.voice = best
+        }
+    }
+
+    private fun matchesLanguage(voice: android.speech.tts.Voice, locale: Locale): Boolean {
+        val v = voice.locale ?: return false
+        if (v.language.equals(locale.language, ignoreCase = true)) {
+            // A region-specific voice only speaks for its own region; an
+            // unspecified one ("en") is the safe fallback for "en-GB".
+            return v.country.isNullOrEmpty() ||
+                v.country.equals(locale.country, ignoreCase = true)
+        }
+        return false
     }
 
     /** Voices available on this device, for the settings picker. */
@@ -79,6 +125,10 @@ class ReadAloudController(
     private var pending: String? = null
     private var counter: Int = 0
 
+    /** Utterance id of the last piece queued, so onDone fires once per passage. */
+    @Volatile
+    private var lastId: String? = null
+
     @Volatile
     private var destroyed = false
 
@@ -91,12 +141,20 @@ class ReadAloudController(
         }
         runCatching { tts.language = Locale.getDefault() }
         runCatching { applyVoice() }
+        runCatching { applyBestVoice() }
         ratePercent = ratePercent
         pending?.let { rest -> speak(rest) }
         pending = null
     }
 
-    /** Speaks [text]; queues until init finishes if needed. */
+    /**
+     * Speaks [text]; queues until init finishes if needed.
+     *
+     * The text is normalised and then queued in pieces. Two separate problems are
+     * addressed: a page sent verbatim is mispronounced (see [SpeechText]), and a
+     * page sent whole is longer than an engine will reliably finish, so it used to
+     * be truncated mid-sentence with no error reported anywhere.
+     */
     fun speak(text: String) {
         if (text.isBlank()) return
         if (destroyed) {
@@ -110,8 +168,10 @@ class ReadAloudController(
             pending = text
             return
         }
-        val id = "bc-tts-${counter++}"
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+        val parts = SpeechText.prepare(text)
+        if (parts.isEmpty()) return
+        val session = counter++
+        val listener = object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
                 _state.value = State(Status.SPEAKING)
             }
@@ -123,17 +183,38 @@ class ReadAloudController(
             }
 
             override fun onDone(utteranceId: String?) {
-                _state.value = State(Status.IDLE)
-                onIdle?.invoke()
-                onDone()
+                // Only the final piece means the whole passage is finished; each
+                // earlier one just hands over to the next in the queue.
+                if (utteranceId == lastId) {
+                    _state.value = State(Status.IDLE)
+                    onIdle?.invoke()
+                    onDone()
+                }
             }
-        })
-        val res = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
-        if (res != TextToSpeech.SUCCESS) {
-            _state.value = State(Status.ERROR, "Couldn't start speech")
-        } else {
-            _state.value = State(Status.SPEAKING)
         }
+        tts.setOnUtteranceProgressListener(listener)
+
+        // The first piece flushes (the user asked to hear this text now); the rest
+        // are appended so the engine keeps a natural pause between them.
+        var lastQueued: String? = null
+        parts.forEachIndexed { index, part ->
+            val id = "bc-tts-$session-$index"
+            val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            val res = runCatching { tts.speak(part, queueMode, null, id) }
+                .getOrDefault(TextToSpeech.ERROR)
+            if (res != TextToSpeech.SUCCESS) {
+                if (index == 0) {
+                    _state.value = State(Status.ERROR, "Couldn't start speech")
+                    return
+                }
+                // The queue was refused part-way: stop cleanly at the piece that
+                // did land rather than reporting the whole passage as finished.
+                return
+            }
+            lastQueued = id
+        }
+        lastId = lastQueued
+        _state.value = State(Status.SPEAKING)
     }
 
     /** Stops current speech; keeps session alive for resume. */

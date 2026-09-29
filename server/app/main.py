@@ -12,7 +12,7 @@ from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.v1.ops import record_request
-from app.core.config import get_settings
+from app.core.config import get_settings, jwt_secret_problem
 from app.core.errors import install_error_handlers
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
@@ -86,13 +86,25 @@ class ObservabilityMiddleware(BaseHTTPMiddleware):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    if settings.jwt_secret == "dev-secret-change-me" and not settings.debug:
-        raise RuntimeError(
-            "Refusing to start: JWT_SECRET is the default development value. "
-            "Set a long random JWT_SECRET (or DEBUG=1 for local development)."
-        )
-    settings = get_settings()
+    # Previously this compared against the single literal "dev-secret-change-me",
+    # which is the value in config.py but NOT the value docker-compose.yml ships
+    # ("change-me-in-production"). Every deployment built from the documented
+    # `docker compose up` therefore started with a publicly-known signing key and
+    # the guard reported nothing, so anyone could mint a valid token for any
+    # account. Layered checks now cover both the placeholder set and low-entropy
+    # secrets of the right length.
+    if not settings.allow_insecure_jwt_secret:
+        problem = jwt_secret_problem(settings.jwt_secret)
+        if problem is not None:
+            raise RuntimeError(
+                f"Refusing to start: JWT_SECRET is unusable because {problem}. "
+                "Generate one with "
+                "`python -c 'from app.core.config import generate_jwt_secret; "
+                "print(generate_jwt_secret())'` and set it in the environment. "
+                "(ALLOW_INSECURE_JWT_SECRET=1 is for local development only.)"
+            )
     _setup_logging()
+
 
     app = FastAPI(
         title="BookCon API",

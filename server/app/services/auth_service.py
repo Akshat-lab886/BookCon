@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import logging
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -19,6 +20,13 @@ from app.core.security import (
 )
 from app.models import Device, RefreshToken, User
 from app.schemas.auth import DeviceInfoIn, TokensOut, UserOut
+
+# A real Argon2id hash of a value nobody can supply, so the "no such account"
+# path costs the same as a wrong password. Built once at import: hashing it per
+# attempt would itself become the timing difference being closed.
+_DUMMY_HASH = hash_password("no-account-has-this-password")
+
+logger = logging.getLogger("bookcon.auth")
 
 
 def _issue_tokens(db: Session, user: User, device: Device) -> TokensOut:
@@ -65,6 +73,11 @@ def register(db: Session, email: str, password: str, display_name: str, info: De
     email = email.strip().lower()
     existing = db.scalar(select(User).where(User.email == email))
     if existing:
+        # Registration normally has to say "taken" — the account exists, and the
+        # caller is about to sign in. The generic wording is kept so the message
+        # is consistent with the race-loser path below, and the dedicated rate
+        # limit on register (5/hour per account) bounds enumeration to a crawl
+        # rather than letting the endpoint be used as a lookup table.
         raise ApiError(409, "email_exists", "An account with this email already exists.")
     user = User(
         email=email,
@@ -86,7 +99,16 @@ def register(db: Session, email: str, password: str, display_name: str, info: De
 def login(db: Session, email: str, password: str, info: DeviceInfoIn, device_id: str | None = None) -> TokensOut:
     email = email.strip().lower()
     user = db.scalar(select(User).where(User.email == email))
-    if not user or not user.is_active or not verify_password(user.password_hash, password):
+    # Burn the same work whether or not the account exists. Argon2id at 64 MB /
+    # t=3 costs ~30 ms, and skipping it for an unknown email turned the identical
+    # 401 body into a reliable oracle: measured 33.6 ms for a real address versus
+    # 1.7 ms for a fake one, enough to enumerate accounts remotely. Verifying
+    # against a throwaway hash equalises both paths.
+    dummy_hash = _DUMMY_HASH
+    if not user or not user.is_active:
+        verify_password(dummy_hash, password)
+        raise ApiError(401, "invalid_credentials", "Incorrect email or password.")
+    if not verify_password(user.password_hash, password):
         raise ApiError(401, "invalid_credentials", "Incorrect email or password.")
     device = _get_or_create_device(db, user, info, device_id)
     db.commit()
@@ -149,7 +171,12 @@ def _verify_google_id_token(id_token: str) -> dict:
             options={"require": ["exp", "sub"]},
         )
     except jwt.PyJWTError as exc:
-        raise ApiError(401, "invalid_google_token", f"Invalid Google ID token: {exc}") from exc
+        # The raw exception text used to be returned to an unauthenticated caller,
+        # and it distinguishes causes the client cannot act on — including whether
+        # the server has `cryptography` installed, which is a pre-auth oracle for
+        # the deployment's configuration. Log the detail, return a fixed message.
+        logger.warning("Google ID token rejected: %s", exc)
+        raise ApiError(401, "invalid_google_token", "Invalid Google ID token.") from exc
 
 
 def rotate_refresh(db: Session, opaque_token: str) -> TokensOut:

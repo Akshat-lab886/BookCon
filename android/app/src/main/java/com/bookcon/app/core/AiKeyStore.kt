@@ -16,7 +16,9 @@ import androidx.security.crypto.MasterKey
  */
 class AiKeyStore(context: Context) {
 
-    private val prefs: SharedPreferences = createPrefs(context.applicationContext)
+    private val appContext = context.applicationContext
+
+    private val prefs: SharedPreferences = createPrefs(appContext)
 
     /** The stored API key, or "" when unset or unreadable. Never throws. */
     fun get(): String = runCatching { prefs.getString(KEY, null) }.getOrNull().orEmpty()
@@ -38,6 +40,14 @@ class AiKeyStore(context: Context) {
     fun clear(): Boolean {
         val result = runCatching { prefs.edit().remove(KEY).commit() }
         result.exceptionOrNull()?.let { Log.w(TAG, "Failed to clear AI key", it) }
+        // createPrefs() selects one of the two files for the process lifetime, so a
+        // run that found the Keystore unavailable left a PLAINTEXT copy behind in
+        // the fallback. Removing the key then only cleared the file this process is
+        // using, and a paid API key stayed readable in the clear. Clear both.
+        runCatching {
+            appContext.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)
+                .edit().remove(KEY).commit()
+        }.exceptionOrNull()?.let { Log.w(TAG, "Failed to clear fallback AI key", it) }
         return result.getOrDefault(false)
     }
 

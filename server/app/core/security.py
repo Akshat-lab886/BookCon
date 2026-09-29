@@ -50,9 +50,20 @@ def create_access_token(user_id: str, device_id: str, minutes: int | None = None
 
 
 def decode_access_token(token: str) -> dict:
-    """Raises jwt.PyJWTError on invalid/expired tokens."""
+    """Raises jwt.PyJWTError on invalid/expired tokens.
+
+    `require` is what stops a token with no `exp` from being accepted: PyJWT only
+    validates a claim that is present, so `jwt.encode({"sub": ..., "did": ...},
+    secret)` used to decode successfully and never expire. Anyone holding the
+    signing key could mint one that outlived every access-token window.
+    """
     settings = get_settings()
-    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    return jwt.decode(
+        token,
+        settings.jwt_secret,
+        algorithms=[settings.jwt_algorithm],
+        options={"require": ["exp", "iat", "sub", "did"]},
+    )
 
 
 # --- Refresh tokens ----------------------------------------------------------

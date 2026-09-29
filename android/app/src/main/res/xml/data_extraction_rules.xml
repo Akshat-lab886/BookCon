@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  See backup_rules.xml for why. The short version: the Keystore-backed files cannot be
-  restored usefully, and the *_fallback files are PLAINTEXT — excluding them is what
-  stops the AI key and session tokens leaving the device in a cloud backup.
+  See backup_rules.xml for the reasoning behind each exclusion. The short version:
+  the Keystore-backed files cannot be restored usefully, the *_fallback files are
+  PLAINTEXT — excluding them is what stops the AI key and session tokens leaving
+  the device in a cloud backup — and vocab/ plus stats/ are the user's own saved
+  words and reading history, which belong to them to move deliberately through
+  DataArchive rather than ride along in a backup bundle.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -10,11 +13,15 @@
         <exclude domain="sharedpref" path="bookcon_ai_fallback.xml" />
         <exclude domain="sharedpref" path="bookcon_ai_secure.xml" />
         <exclude domain="sharedpref" path="bookcon_session_fallback.xml" />
+        <exclude domain="file" path="vocab" />
+        <exclude domain="file" path="stats" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="bookcon_secure_prefs.xml" />
         <exclude domain="sharedpref" path="bookcon_ai_fallback.xml" />
         <exclude domain="sharedpref" path="bookcon_ai_secure.xml" />
         <exclude domain="sharedpref" path="bookcon_session_fallback.xml" />
+        <exclude domain="file" path="vocab" />
+        <exclude domain="file" path="stats" />
     </device-transfer>
 </data-extraction-rules>

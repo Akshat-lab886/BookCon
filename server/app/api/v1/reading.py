@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_device_id
 from app.core.errors import ApiError
 from app.models import Annotation, Bookmark, ReadingPosition, User
 from app.schemas.library import (
@@ -207,9 +207,13 @@ def get_positions(
 def put_position(
     book_id: str,
     body: PositionIn,
-    device_id: str | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    # Bound from the verified token, not from a query parameter. As a plain
+    # argument this was a client-supplied value that landed in the row's device_id
+    # column, so the audit trail recorded whatever the caller claimed. Every other
+    # attribution path in the app already resolves it this way.
+    device_id: str | None = Depends(get_device_id),
 ) -> PositionOut:
     get_book_or_404(db, user.id, book_id)
     row = db.get(ReadingPosition, (user.id, book_id))

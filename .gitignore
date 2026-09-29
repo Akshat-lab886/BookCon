@@ -37,3 +37,4 @@ android/app/build/screenshots/
 
 # Local working notes (audit scratch docs, device captures)
 *_AUDIT_REPORT.md
+AUDIT-*.md

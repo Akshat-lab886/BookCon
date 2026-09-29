@@ -17,7 +17,9 @@ import javax.inject.Singleton
 @Singleton
 class SessionStore @Inject constructor(@ApplicationContext context: Context) {
 
-    private val prefs: SharedPreferences = createPrefs(context)
+    private val appContext = context.applicationContext
+
+    private val prefs: SharedPreferences = createPrefs(appContext)
 
     private val _session = MutableStateFlow(loadSession())
     val session: StateFlow<Session?> = _session
@@ -69,6 +71,20 @@ class SessionStore @Inject constructor(@ApplicationContext context: Context) {
                 putString(KEY_EMAIL, session.email)
             }
         }.commit()
+        // createPrefs() picks ONE of the two files for the life of the process, so
+        // `prefs` is not necessarily the file that was actually written last time.
+        // If an earlier run found the Keystore unavailable it stored a live
+        // refresh token in the PLAINTEXT fallback; a later run, with the Keystore
+        // working, writes to the encrypted file and never looks at the fallback
+        // again. Signing out then cleared only the encrypted copy and left a
+        // working refresh token sitting in the clear on disk — a session the user
+        // believed they had ended. Both files are cleared on sign-out.
+        if (session == null) {
+            runCatching {
+                appContext.getSharedPreferences(FILE_FALLBACK, Context.MODE_PRIVATE)
+                    .edit().clear().commit()
+            }
+        }
         _session.value = session
     }
 
